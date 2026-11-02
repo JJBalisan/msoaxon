@@ -192,7 +192,17 @@ def test_keys_feed_the_caches():
     assert _dispatch.describe("multi", 3, -68.0, mem=m).endswith(
         "mem=membrane(v0=-68.0, soma_klt_scale=1.0, ais_klt_scale=1.0, "
         "soma_na_vhalf=-62.5, rebalance_rest=False, dendrite_klt_scale=1.0, "
-        "axon_rest=-68.0)"
+        "axon_rest=-68.0, klt_to_leak=None)"
+    )
+
+
+@pytest.mark.parametrize("kind", ["chord", "slope"])
+def test_describe_names_klt_to_leak(kind):
+    # the setting lives in the morphology's key, not in Membrane.key
+    m = multi.membrane(-68.0, klt_to_leak=kind)
+    assert m.key == multi.membrane(-68.0).key
+    assert _dispatch.describe("multi", 3, -68.0, mem=m).endswith(
+        f"axon_rest=-68.0, klt_to_leak={kind!r})"
     )
 
 
