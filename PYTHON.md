@@ -264,6 +264,7 @@ response is a microvolt difference of two runs, and native's steps move
 `rin_peak` by about 1e-3, past those digits but not the published ones.
 
 **Python-only behaviour to reproduce, or keep in Python:**
+
 - `spike_amplitude`: a not-a-knot `CubicSpline` on a float `np.arange` grid at
   1 µs, after the `np.diff(t) > 0` filter.
 - Events: brentq on BDF's dense output. `settled_event` jumps from -1 to +1;
@@ -452,6 +453,7 @@ comes from issue #84; the paper was not read here, so whether their gax is this
 `figures/coupling_plane/` gets the figure and a JSON, and `--quick` is a smoke
 test with a coarse grid. The row of results over the plane is proposed in the
 pull request and not published here until it is approved. The protocol:
+
 - the plane is Goldwyn et al.'s: forward coupling not weaker than backward
   (their Fig 3 leaves the upper left half empty) and the ratio of the two at
   most ten (their Methods, so that the axon's time constant stays an order of
@@ -481,6 +483,7 @@ pull request and not published here until it is approved. The protocol:
 
 Measured the way Myoga et al. 2014 did in adult gerbil MSO at 35 °C
 ([doi](https://doi.org/10.1038/ncomms4790)):
+
 - two identical EPSGs, their relative timing stepped in 20 µs;
 - inputs slightly above the coincident threshold, so spike probability peaks
   near 100%;
@@ -498,6 +501,7 @@ margin matters a lot, and the paper's "200 pS (~3%)" is ambiguous: 200 pS is
 closer to 0.5% of their 43 nS EPSGs.
 
 How the widths are computed:
+
 - `coincidence.window()` does what the experiment does: it fixes the input at
   (1 + margin) × the coincident threshold (resolved to 1e-4) and searches over
   delay, to 0.1 µs, for where that input stops spiking. Probability is 50%
@@ -516,6 +520,7 @@ How the widths are computed:
   probability near 85%, the half-maximum width comes out about 10% wider.
 
 Findings:
+
 - With matched methods, the original calibration reproduces the measured window
   closely.
 - Goldwyn's faster membrane narrows it by about 17%.
@@ -539,6 +544,7 @@ Findings:
 A run counts as a spike once axon − soma exceeds 10 mV, as in the MATLAB
 EPSG-pair sweeps (`coincidence.FACTOR`, `somatic.FACTOR`). That fixed value
 means different things in different models:
+
 - **45-compartment and `TwoCpt.m`:** 10 mV is about 26% of their spike (38 mV of
   axon − soma). It sits on the foot of the takeoff, which comes 1–3% above that
   threshold.
@@ -554,6 +560,7 @@ means different things in different models:
 The criterion is an option (issue #21). `coincidence.threshold`,
 `threshold_curve`, `window` and `probability_trials`, and `somatic.fires`,
 `rheobase` and `spike_amplitude` take `criterion=`:
+
 - a float is absolute, in mV; the default is 10.0, so nothing changes unless you
   ask;
 - `coincidence.Relative(0.5)` is 50% of that configuration's own spike height.
@@ -737,6 +744,7 @@ than the spike.
   spike merge and the inflection is ambiguous.
 
 `mso_axon(..., mem=membrane(v0, ...))` exposes the knobs used for the block:
+
 - `soma_klt_scale` and `ais_klt_scale`
 - `soma_na_vhalf`: Scott et al. 2010
   ([doi](https://doi.org/10.1523/JNEUROSCI.2385-09.2010)) measured −77 mV
@@ -853,6 +861,7 @@ from `BinarySearch.m`'s `sine` sweep, which stops after one half-cycle
 both models), and set it against the subthreshold number: a single pulse's
 width against a resonance, a mismatch of measure.
 `msoaxon/resonance.py` measures all three the way the paper does:
+
 - **Subthreshold:** the soma's impedance from a 20 pA rectified `sine` at one
   frequency per run (no chirp: a new `stim_type` would need the Rust side). The
   half-wave sine is I/π + (I/2) sin ωt plus even harmonics, so over whole cycles
@@ -883,6 +892,7 @@ width against a resonance, a mismatch of measure.
 | 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.75 | 429 Hz | 420 Hz |
 
 What it shows:
+
 - **The mechanism is the paper's.** All three resonances need KLT: with KLT
   replaced by a leak the impedance is low-pass, the sine threshold rises with
   frequency and the EPSG-train threshold no longer has a minimum. Both
@@ -1071,6 +1081,7 @@ dendritic variant in Lehnert et al. 2014 (their Fig. 8). The lumped model's 8750
 µm² "soma" stands for soma plus dendrites: in the paper's words it "combines the
 somatic and dendritic membrane surface", sized for 70 pF. So the dendrites take
 their membrane from it rather than being added on top:
+
 - two unbranched dendrites, each 200 µm × 5 µm, five compartments each;
 - the soma reduced to 2467 µm², so total membrane stays 8750 µm²;
 - somatic Na density scaled up so total Na is unchanged;
@@ -1079,6 +1090,7 @@ their membrane from it rather than being added on top:
   et al. 2010, [doi](https://doi.org/10.1038/nn.2530)).
 
 How to use it:
+
 - Dendrite compartments are appended after the axon, so compartments 1–45 keep
   their meaning. Numbers 46–50 are the lateral (ipsilateral) dendrite, 51–55 the
   medial (contralateral), proximal to distal.
@@ -1088,6 +1100,7 @@ How to use it:
 - `uv run scripts/dendrites.py` runs every check below.
 
 Two things the paper doesn't state:
+
 - **Axial resistivity.** The model's 100 Ω·cm is kept by default; Mathews
   used 200. `with_dendrites(dendrite_ra=200)` (script: `--dendrite-ra 200`)
   changes it for the dendrites only, and the results are in the section after
@@ -1114,6 +1127,7 @@ model. It also fixes the EPSP width and keeps the somatic spike near mature
 size.
 
 Neither variant matches everything:
+
 - **Conserving totals** narrows the coincidence window below Myoga's value.
 - **The soma-density gradient** matches the input resistance and the window, but
   leaves the spike too large.
@@ -1149,6 +1163,7 @@ Values below are for Ra = 100 → 200.
 | Somatic spike at 1.5 / 2 / 3× rheobase | 16.7 / 20.9 / 25.9 → 19.8 / 24.5 / 29.5 mV | 21.1 / 26.1 / 30.8 → 25.8 / 30.9 / 35.4 mV |
 
 What the higher resistivity does:
+
 - **It isolates the soma from the dendrites.** Somatic EPSPs get larger and
   narrower, dendritic EPSPs are attenuated more, and the soma sees less of the
   dendritic membrane.
