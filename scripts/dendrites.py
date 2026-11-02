@@ -127,6 +127,26 @@ def _compact(values: np.ndarray) -> list[float]:
     return plotting.compact(values)
 
 
+def window_marks(E: dict[str, Any]) -> list[tuple[float, str]]:
+    """Returns where panel E marks each curve's 3% window.
+
+    A curve crosses 1.03 at half its window: the delay at which an input
+    3% above the coincident threshold just fires, on either side.
+
+    Args:
+        E: E_window_bilateral_dendritic_us (kinetics -> margin -> us).
+
+    Returns:
+        (delay [us], colour) per kinetics, in the order E lists them.
+    """
+    from msoaxon import plotting
+
+    return [
+        (widths["margin_0.03"] / 2, plotting.COLOURS["multi"])
+        for widths in E.values()
+    ]
+
+
 def variant(args: dict[str, Any]) -> str:
     """Names the dendritic variant a run used, for the figure's title.
 
@@ -228,8 +248,16 @@ def draw(res: dict[str, Any], args: dict[str, Any]) -> Any:
             for (kname, th), ls in zip(curves.items(), ("-", "--"), strict=True)
         ],
     )
+    # the window's half-width is where a curve crosses 1.03: mark it, and
+    # half of Myoga's 221 us, the delay their window reaches on each side
+    for x_cross, colour in window_marks(E):
+        ax[1].plot(x_cross, 1.03, marker="|", ms=10, mew=1.5, color=colour)
+    ax[1].axvline(MYOGA_US / 2, color=plotting.GREY, ls="--", lw=0.8)
     ax[1].set_title(
-        plotting.glyphs(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
+        plotting.glyphs(
+            f"Window at 3% margin (ticks: half-width)\n"
+            f"dashed: Myoga 2014's {MYOGA_US} us / 2"
+        )
     )
     ax[1].legend(**below)
     for k, th in F.items():

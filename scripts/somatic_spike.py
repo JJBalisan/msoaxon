@@ -12,11 +12,16 @@ import pathlib
 import textwrap
 from typing import Any
 
+import numpy as np
+
 from msoaxon import multi, somatic
 
 # the somatic trace has a distinct inflection only from ~1.35x to ~4.5x rheobase
 # (spike_amplitude's `distinct` flag)
 MULTS = (1.5, 2.0, 3.0)
+# Scott et al 2005: mature MSO, 17 +- 2 mV; with dendrotoxin, 15 -> 37 mV
+SCOTT_MATURE = (15.0, 19.0)
+SCOTT_DTX = (15.0, 37.0)
 CASES = {
     "45-compartment (msoAxon.m)": ("multi", {}),
     "45-compartment, KLT blocked at soma + AIS (dendrotoxin)": (
@@ -100,8 +105,26 @@ def main() -> None:
     print(f"saved {out}/somatic_spike.png, .pdf and .json")
 
 
+def reference(name: str) -> tuple[float, float]:
+    """Returns the Scott et al 2005 amplitudes a case is compared with.
+
+    Args:
+        name: A key of CASES.
+
+    Returns:
+        (low, high) [mV]: 17 +- 2 mV for mature MSO cells, or for the
+        dendrotoxin case the amplitude before (15) and with it (37).
+    """
+    return SCOTT_DTX if "dendrotoxin" in name else SCOTT_MATURE
+
+
 def draw(results: dict[str, Any]) -> Any:
     """Draws one panel per case from the results (or their JSON).
+
+    Each trace is drawn from its inflection point (time and voltage), so
+    the spikes align and the amplitude is the height above 0; a bracket at
+    the peak shows the amplitude the legend gives, and the Scott et al 2005
+    values are drawn as a band (mature cells) or as lines (dendrotoxin).
 
     Args:
         results: Per case: rheobase_pA and spikes, each spike with its
@@ -113,38 +136,56 @@ def draw(results: dict[str, Any]) -> Any:
     from msoaxon import plotting
 
     cases = {k: v for k, v in results.items() if k != "meta"}
-    fig = plotting.figure("double", height=2.8)
-    axes = fig.subplots(1, len(cases), sharey=True)
+    fig = plotting.figure("double", height=3.0)
+    axes = fig.subplots(1, len(cases), sharex=True, sharey=True)
     for ax, (name, case) in zip(axes, cases.items(), strict=True):
+        lo, hi = reference(name)
+        if "dendrotoxin" in name:
+            ax.axhline(lo, color=plotting.GREY, ls=":", lw=0.8)
+            ax.axhline(hi, color=plotting.GREY, ls="--", lw=0.8)
+            ref = f"Scott 2005: {lo:g} mV, with dendrotoxin {hi:g} mV"
+        else:
+            ax.axhspan(lo, hi, color="0.88", zorder=0)
+            mid, half = (lo + hi) / 2, (hi - lo) / 2
+            ref = f"Scott 2005, mature MSO: {mid:g} ± {half:g} mV"
         for r in case["spikes"]:
             # one sequential map over MULTS: the same multiple is the same
             # colour in every panel, and in a quick run
             (colour,) = plotting.sequential(
                 [r["multiple"]], min(MULTS), max(MULTS)
             )
+            t = np.asarray(r["trace"]["t_ms"]) - r["t_inflection"]
+            v = np.asarray(r["trace"]["soma_mV"]) - r["v_inflection"]
             ax.plot(
-                r["trace"]["t_ms"],
-                r["trace"]["soma_mV"],
+                t,
+                v,
                 color=colour,
                 label=f"{r['multiple']}x: {r['amplitude']:.1f} mV",
             )
-            ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=5)
-        # wrapped: three long titles side by side on a 7 in figure
+            # the amplitude as a bracket at the peak, from the inflection
+            t_pk = t[int(np.argmax(v))]
+            ax.plot(
+                [t_pk, t_pk],
+                [0, r["amplitude"]],
+                color=colour,
+                lw=0.8,
+                marker="_",
+                ms=6,
+            )
+        ax.plot(0, 0, "k.", ms=5)  # the inflection, where every trace starts
         ax.set_title(
             f"{textwrap.fill(name, 30)}\nrheobase {case['rheobase_pA']:.0f} pA"
         )
-        ax.set_xlabel("Time (ms)")
+        ax.set_xlabel("Time from the inflection (ms)")
+        ax.set_xlim(-1.0, 2.0)
         # below the panel: the spike and its dot fill the panel's corners
         ax.legend(
-            title="rheobase multiple: amplitude\nfrom the inflection (dot)",
+            title=f"rheobase multiple: amplitude\n({ref})",
             loc="upper center",
             bbox_to_anchor=(0.5, -0.22),
         )
-    axes[0].set_ylabel("Soma voltage (mV)")
-    fig.suptitle(
-        "Somatic spike, 100 ms step (Scott et al 2005 protocol). "
-        "Mature MSO: 17 ± 2 mV; dendrotoxin: 15 → 37 mV"
-    )
+    axes[0].set_ylabel("Soma voltage from the inflection (mV)")
+    fig.suptitle("Somatic spike, 100 ms step (Scott et al 2005 protocol)")
     return fig
 
 

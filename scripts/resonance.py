@@ -176,6 +176,45 @@ def markdown(results: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
+def peak(key: str, d: dict[str, Any]) -> tuple[float, float] | None:
+    """Returns the point a panel marks for one arm: its resonance.
+
+    Args:
+        key: "subthreshold", "spike" or "epsg".
+        d: That protocol's result for the arm (or its JSON).
+
+    Returns:
+        (frequency [Hz], value): the impedance peak (f_res, z_peak) or the
+        threshold minimum (f_best, threshold), or None when the arm has no
+        resonance.
+    """
+    if not d.get("resonant"):
+        return None
+    if key == "subthreshold":
+        return d["f_res"], d["z_peak"]
+    return d["f_best"], d["threshold"]
+
+
+def legend_label(name: str, r: dict[str, Any]) -> str:
+    """Returns an arm's legend entry: its name and its three resonances.
+
+    Args:
+        name: The arm.
+        r: Its results (or their JSON).
+
+    Returns:
+        "name: 373 (+131), 475 (+190), 434 (+117) Hz", each resonance with
+        its offset from TARGETS, or "none" for a protocol without one.
+    """
+    parts = []
+    for key, target in TARGETS.items():
+        at = peak(key, r[key])
+        parts.append(
+            "none" if at is None else f"{at[0]:.0f} ({at[0] - target:+.0f})"
+        )
+    return f"{name}: {', '.join(parts)} Hz"
+
+
 def plot(
     results: dict[str, Any],
     path: pathlib.Path,
@@ -215,24 +254,31 @@ def plot(
     for ax, (key, ykey, ylabel, xlabel) in zip(axes, panels, strict=True):
         for name, r in results.items():
             d = r[key]
-            ax.plot(
-                d["freqs"],
-                d[ykey],
-                marker=".",
-                label=name,
-                **plotting.model_style(*ARM_STYLES[name]),
-            )
+            style = plotting.model_style(*ARM_STYLES[name])
+            ax.plot(d["freqs"], d[ykey], marker=".", label=name, **style)
+            # the arm's resonance (its value and offset are in the legend)
+            at = peak(key, d)
+            if at is not None:
+                ax.plot(*at, marker="D", ms=5, mec="k", color=style["color"])
         ax.axvline(TARGETS[key], color=plotting.GREY, ls=":", lw=1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         if key != "subthreshold":
             ax.set_yscale("log")
+            plotting.plain_log_ticks(ax)
     # one legend for the three panels, below them: at 7 in the arm names are
     # wider than a panel
+    handles, names = axes[0].get_legend_handles_labels()
     fig.legend(
-        *axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=2
+        handles,
+        [legend_label(name, results[name]) for name in names],
+        loc="outside lower center",
     )
-    fig.suptitle("Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)")
+    fig.suptitle(
+        "Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)\n"
+        "Diamonds: resonances; legend: subthreshold, spike, EPSG [Hz] "
+        "(offset from the paper's)"
+    )
     plotting.save(fig, path, data=data, args=args)
 
 

@@ -38,16 +38,17 @@ def draw(d: dict[str, Any]) -> Any:
     """Draws the figure from its data (or its JSON).
 
     Args:
-        d: The graph settings (without Syn, rebuilt from tEnd) and the runs'
-            times and states as drawn: t1, y (the 45 compartments' voltages),
-            t2, x and t3, z (soma and axon).
+        d: The graph settings (without Syn, rebuilt from tEnd), the time
+            window drawn, and the runs' times and states as drawn: t1, y
+            (the 45 compartments' voltages), t2, x and t3, z (soma and
+            axon).
 
     Returns:
         The figure.
     """
     graph = {**d["graph"], "Syn": syn_params(d["graph"]["tEnd"])}
     runs = (np.asarray(d[k]) for k in ("t1", "y", "t2", "x", "t3", "z"))
-    return plotting.graphing(graph, *runs)
+    return plotting.graphing(graph, *runs, window=d.get("window", "event"))
 
 
 def main() -> None:
@@ -88,6 +89,19 @@ def main() -> None:
         default="ModelComparison",
         help="ModelComparison, NodeComparison, MultiCompartment, Contour, "
         "Input, Multigraph, ModelComparison2",
+    )
+    ap.add_argument(
+        "--window",
+        type=float,
+        nargs=2,
+        metavar=("T0", "T1"),
+        help="time axis [ms] (default: a few ms around the first trace to "
+        "rise 10 mV, see plotting.event_window)",
+    )
+    ap.add_argument(
+        "--full",
+        action="store_true",
+        help="draw the whole run, 0 to --t-end, as Combine_all.m did",
     )
     ap.add_argument(
         "--out",
@@ -141,17 +155,23 @@ def main() -> None:
     # to 6 significant digits: the 45 compartments' voltages (Contour and
     # Multigraph), and the two-compartment soma and axon
     s1, s2, s3 = (plotting.thin(len(t)) for t in (t1, t2, t3))
+    graph = {
+        "Type": a.graph,
+        "node": a.node,
+        "tEnd": a.t_end,
+        "stimType": a.stim,
+        "inputNode": a.input_node,
+        "start": a.start,
+        "stop": stop,
+        "I": I,
+    }
+    # resolved on the full runs, so a replot draws the same window
+    window = plotting.graph_window(
+        graph, t1, y, t2, x, None if a.full else (a.window or "event")
+    )
     data = {
-        "graph": {
-            "Type": a.graph,
-            "node": a.node,
-            "tEnd": a.t_end,
-            "stimType": a.stim,
-            "inputNode": a.input_node,
-            "start": a.start,
-            "stop": stop,
-            "I": I,
-        },
+        "window": list(window),
+        "graph": graph,
         "t1": plotting.compact(t1[s1]),
         "y": plotting.compact(y[s1, :45]),
         "t2": plotting.compact(t2[s2]),
@@ -159,7 +179,9 @@ def main() -> None:
         "t3": plotting.compact(t3[s3]),
         "z": plotting.compact(z[s3, :2]),
     }
-    fig = plotting.graphing({**data["graph"], "Syn": syn}, t1, y, t2, x, t3, z)
+    fig = plotting.graphing(
+        {**graph, "Syn": syn}, t1, y, t2, x, t3, z, window=window
+    )
     if a.out:  # out.png writes out.png, out.pdf and out.json
         for path in plotting.save(fig, a.out, data=data, args=vars(a)):
             print(f"saved {path}")

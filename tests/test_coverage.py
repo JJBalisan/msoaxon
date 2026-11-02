@@ -697,7 +697,7 @@ def test_glyphs():
 def test_graphing_colours_follow_the_models(runs):
     graph, data = runs
     fig = plotting.graphing({**graph, "Type": "Multigraph"}, *data)
-    top, two3, two5, inp = fig.axes
+    top, _bar, two3, two5, inp = fig.axes
     colours = [mpl.colors.to_hex(line.get_color()) for line in top.lines]
     assert colours[0] == "#000000"  # the soma
     assert len(set(colours)) == 9  # nine distinct, ordered node colours
@@ -873,3 +873,174 @@ def test_sweeps_carry_units():
     assert {s.unit for s in sweeps.values()} == {"pA", "nS per EPSG"}
     assert sweeps["EPSGpair"].x_unit == "us"  # as in the coincidence figures
     assert [k for k, s in sweeps.items() if s.mark_min] == ["ramp", "sine"]
+
+
+def test_event_window():
+    t = np.linspace(0, 20, 2001)
+    V = np.full((len(t), 2), -68.0)
+    V[t >= 5.3, 1] = -50.0  # node rises 18 mV at 5.3 ms
+    assert plotting.event_window(t, V, 20) == pytest.approx((4.3, 9.3))
+    # no trace rises: centred on the stimulus onset, within the run
+    flat = np.full(len(t), -68.0)
+    assert plotting.event_window(t, flat, 20, start=19) == (18.0, 20.0)
+
+
+def test_graphing_zooms_to_the_event_and_shares_y(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "ModelComparison"}, *data)
+    a1, a2 = fig.axes
+    t0, t1 = a1.get_xlim()
+    assert 3.5 < t0 < 5.5 and t1 - t0 == pytest.approx(5.0)  # not 0 to 20
+    assert a1.get_ylim() == a2.get_ylim()  # the two models compare by eye
+    assert a1.lines[0].get_zorder() > a1.lines[1].get_zorder()  # soma on top
+    assert a2.get_title() == "2-compartment model, node 3"
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing(
+        {**graph, "Type": "ModelComparison"}, *data, window=None
+    )
+    assert fig.axes[0].get_xlim() == (0.0, 20.0)  # the whole run
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing(
+        {**graph, "Type": "ModelComparison"}, *data, window=(6, 8)
+    )
+    assert fig.axes[0].get_xlim() == (6.0, 8.0)
+    mpl.pyplot.close(fig)
+
+
+def test_contour_is_a_heat_map_and_multigraph_has_a_node_bar(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "Contour"}, *data)
+    ax, bar = fig.axes
+    mesh = ax.collections[0]
+    assert mesh.get_array().shape == (45, len(data[0]))  # cpt x time
+    assert bar.get_ylabel() == "Voltage (mV)"
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing({**graph, "Type": "Multigraph"}, *data)
+    top, bar, two3, two5, _ = fig.axes
+    assert list(bar.get_yticks()) == [3, 5, 9, 13, 21, 29, 37, 45]
+    assert top.get_ylim() == two3.get_ylim() == two5.get_ylim()
+    assert [t.get_text() for t in top.get_legend().get_texts()] == ["Soma"]
+    mpl.pyplot.close(fig)
+
+
+def _script(name):
+    return runpy.run_path(str(REPO / "scripts" / name))
+
+
+def test_resonance_marks_the_json_numbers():
+    script = _script("resonance.py")
+    arm = {
+        "subthreshold": {
+            "resonant": True,
+            "f_res": 373.2,
+            "z_peak": 6.7,
+            "freqs": [20.0, 373.2, 500.0],
+            "z": [2.4, 6.7, 5.5],
+        },
+        "spike": {
+            "resonant": True,
+            "f_best": 475.0,
+            "threshold": 3600.0,
+            "freqs": [250.0, 475.0, 650.0],
+            "thresholds": [5000.0, 3600.0, 4400.0],
+        },
+        "epsg": {"resonant": False, "f_best": 300.0, "dip": 0.99},
+    }
+    assert script["peak"]("subthreshold", arm["subthreshold"]) == (373.2, 6.7)
+    assert script["peak"]("spike", arm["spike"]) == (475.0, 3600.0)
+    assert script["peak"]("epsg", arm["epsg"]) is None
+    assert script["legend_label"]("arm", arm) == (
+        "arm: 373 (+131), 475 (+190), none Hz"
+    )
+
+
+def test_resonance_plot_marks_peaks(monkeypatch, tmp_path):
+    script = runpy.run_path(
+        str(REPO / "scripts" / "resonance.py"), run_name="resonance_test"
+    )
+    figs = []
+    monkeypatch.setattr(
+        plotting, "save", lambda fig, path, **kw: figs.append(fig)
+    )
+    curve = {
+        "freqs": [250.0, 450.0, 650.0],
+        "thresholds": [5000.0, 3600.0, 4400.0],
+    }
+    arm = {
+        "subthreshold": {
+            "resonant": True,
+            "f_res": 350.0,
+            "z_peak": 6.7,
+            "freqs": [20.0, 350.0, 500.0],
+            "z": [2.4, 6.7, 5.5],
+        },
+        "spike": {
+            **curve,
+            "resonant": True,
+            "f_best": 450.0,
+            "threshold": 3600.0,
+        },
+        "epsg": {
+            **curve,
+            "resonant": False,
+            "f_best": 450.0,
+            "threshold": 3600.0,
+        },
+    }
+    script["plot"]({"45-compartment (msoAxon.m)": arm}, tmp_path / "r.png")
+    sub, spike, epsg = figs[0].axes
+    diamonds = [ln for ln in sub.lines if ln.get_marker() == "D"]
+    assert [(ln.get_xdata()[0], ln.get_ydata()[0]) for ln in diamonds] == [
+        (350.0, 6.7)
+    ]
+    assert not [ln for ln in epsg.lines if ln.get_marker() == "D"]
+    # plain tick labels on the log axes, no 6 x 10^3
+    spike.figure.canvas.draw()
+    labels = [t.get_text() for t in spike.get_yticklabels(minor=True)]
+    assert all("times" not in t and "^" not in t for t in labels)
+    mpl.pyplot.close(figs[0])
+
+
+def test_somatic_draw_aligns_and_brackets_the_amplitude():
+    script = _script("somatic_spike.py")
+    t = np.linspace(4.8, 8.0, 321)
+    v = -68 + 40 * np.exp(-(((t - 5.5) / 0.1) ** 2))
+
+    def case(amp):
+        return {
+            "rheobase_pA": 3800.0,
+            "spikes": [
+                {
+                    "multiple": 1.5,
+                    "amplitude": amp,
+                    "t_inflection": 5.3,
+                    "v_inflection": -50.0,
+                    "trace": {"t_ms": list(t), "soma_mV": list(v)},
+                }
+            ],
+        }
+
+    names = list(script["CASES"])
+    fig = script["draw"]({names[0]: case(22.0), names[1]: case(30.0)})
+    a0, a1 = fig.axes
+    assert a0.get_xlim() == a1.get_xlim() == (-1.0, 2.0)  # aligned, shared
+    trace, bracket = a0.lines[0], a0.lines[1]
+    np.testing.assert_allclose(trace.get_xdata()[0], 4.8 - 5.3)
+    np.testing.assert_allclose(trace.get_ydata().max(), -28 + 50)
+    assert list(bracket.get_ydata()) == [0, 22.0]  # the JSON's amplitude
+    assert bracket.get_xdata()[0] == pytest.approx(0.2, abs=0.01)  # the peak
+    # Scott et al 2005: a 17 +- 2 mV band, and lines for dendrotoxin
+    band = a0.patches[0]
+    assert (band.get_y(), band.get_y() + band.get_height()) == (15.0, 19.0)
+    refs = [ln for ln in a1.lines if ln.get_linestyle() in ("--", ":")]
+    assert sorted(ln.get_ydata()[0] for ln in refs) == [15.0, 37.0]
+    mpl.pyplot.close(fig)
+
+
+def test_dendrites_e_marks_the_half_windows():
+    script = _script("dendrites.py")
+    E = {
+        "model EPSG (0.18 ms)": {"margin_0.005": 60.0, "margin_0.03": 166.0},
+        "Myoga EPSG (0.3 ms)": {"margin_0.005": 70.0, "margin_0.03": 182.0},
+    }
+    assert [x for x, _ in script["window_marks"](E)] == [83.0, 91.0]
