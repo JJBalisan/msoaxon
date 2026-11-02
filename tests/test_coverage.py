@@ -773,3 +773,103 @@ def test_compact_and_thin():
     assert plotting.compact([[0.1, float("nan")]])[0][0] == 0.1
     assert plotting.thin(5000) == slice(None, None, 3)
     assert plotting.thin(100) == slice(None, None, 1)
+
+
+def test_threshold_residual():
+    r = plotting.threshold_residual(
+        [15000, 10000, 200], [15000, 10500, 190], 15000
+    )
+    assert np.isnan(r[0])  # no threshold in either model: no residual
+    np.testing.assert_allclose(r[1:], [5.0, -5.0])
+
+
+def test_mark_minimum_marks_only_an_interior_minimum():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    assert plotting.mark_minimum(ax, [1, 2, 3, 4], [9, 4, 5, 6], "ms") == 1
+    assert ax.lines[-1].get_xdata()[0] == 2
+    assert ax.texts[-1].get_text() == "min 2 ms"
+    assert plotting.mark_minimum(ax, [1, 2, 3], [5, 6, 7], "ms") is None
+    # a ceiling point is no minimum, and neither is the end it leaves
+    assert plotting.mark_minimum(ax, [1, 2, 3], [1, 2, 3], "ms", 1) is None
+    mpl.pyplot.close(fig)
+
+
+def _panel(title, unit, ceiling, thresholds, mark_min):
+    return {
+        "title": title,
+        "xlabel": "x",
+        "x_unit": "us" if unit == "nS per EPSG" else "ms",
+        "x_scale": 1000 if unit == "nS per EPSG" else 1,
+        "unit": unit,
+        "ceiling": ceiling,
+        "resolution": 10 if unit == "pA" else 1,
+        "mark_min": mark_min,
+        "x": [0.0, 0.04, 0.08],
+        "thresholds": thresholds,
+    }
+
+
+def test_threshold_grid():
+    panels = {
+        "ramp": _panel(
+            "Ramp",
+            "pA",
+            15000,
+            {
+                "3": {"multi": [15000, 9000, 9500], "two": [15000, 8800, 9600]},
+                "5": {"multi": [12000, 6000, 7000], "two": [12000, 6100, 7100]},
+            },
+            True,
+        ),
+        "EPSGpair": _panel(
+            "EPSG pair",
+            "nS per EPSG",
+            150,
+            {
+                "3": {"multi": [48, 50, 60], "two": [48, 51, 60]},
+                "5": {"multi": [47, 49, 58], "two": [47, 49, 59]},
+            },
+            False,
+        ),
+    }
+    fig = plotting.threshold_grid(panels, [3, 5])
+    # per column: node 3, its residual, node 5, its residual
+    ramp3, ramp3_res, ramp5, ramp5_res = fig.axes[:4]
+    pair3 = fig.axes[4]
+    assert ramp3.get_ylim() == ramp5.get_ylim()  # nodes share y limits
+    assert ramp3.get_ylabel() == "Threshold (pA)"
+    assert pair3.get_ylabel() == "Threshold (nS per EPSG)"
+    assert ramp5_res.get_xlabel() == "x (ms)"
+    assert fig.axes[7].get_xlabel() == "x (\N{MICRO SIGN}s)"
+    # EPSG-pair delays drawn in us
+    np.testing.assert_allclose(pair3.lines[0].get_xdata(), [0, 40, 80])
+    # the two-compartment curve dashed, the 45's solid
+    assert ramp3.lines[0].get_linestyle() == "-"
+    assert ramp3.lines[2].get_linestyle() == "--"
+    # residual strip: (two - multi) / multi in percent, none at the ceiling
+    res = ramp3_res.lines[-1].get_ydata()
+    assert np.isnan(res[0])
+    np.testing.assert_allclose(res[1:], [-200 / 90, 100 / 95])
+    # the ramp's interior minimum is marked for each model; EPSGpair is not
+    assert [t.get_text() for t in ramp3.texts] == ["min 0.04 ms"]
+    assert len([ln for ln in ramp3.lines if ln.get_marker() == "v"]) == 2
+    assert not pair3.texts
+    assert "search resolution 1 nS per EPSG, 10 pA" in fig.get_suptitle()
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_draws_two_dashed():
+    fig = plotting.threshold_figure([1, 2], [48, 50], [48, 51], "t", "x")
+    assert [line.get_linestyle() for line in fig.axes[0].lines] == ["-", "--"]
+    mpl.pyplot.close(fig)
+
+
+def test_sweeps_carry_units():
+    script = runpy.run_path(
+        str(REPO / "scripts" / "making_threshold_graphs.py")
+    )
+    sweeps = script["SWEEPS"]
+    assert {s.unit for s in sweeps.values()} == {"pA", "nS per EPSG"}
+    assert sweeps["EPSGpair"].x_unit == "us"  # as in the coincidence figures
+    assert [k for k, s in sweeps.items() if s.mark_min] == ["ramp", "sine"]
