@@ -340,7 +340,13 @@ def test_a_sweep_where_nothing_spikes_still_writes_its_results(
 
     plotted = []
     monkeypatch.setattr(script, "sweep", silent)
-    monkeypatch.setattr(script, "plot", lambda *a: plotted.append(a))
+    draw = script.plot  # the real plot writes the figure and its JSON
+
+    def plot(*a, **kw):
+        plotted.append(a)
+        draw(*a, **kw)
+
+    monkeypatch.setattr(script, "plot", plot)
     monkeypatch.setattr(
         "sys.argv", ["coupling_plane.py", "--quick", "--out-dir", str(tmp_path)]
     )
@@ -355,7 +361,9 @@ def test_a_sweep_where_nothing_spikes_still_writes_its_results(
 def test_plot_colour_scale_is_not_autoscaled(monkeypatch, tmp_path):
     # the quick plane's spread: 199 to 201 us, 34 to 47 nS (#136)
     figs = []
-    monkeypatch.setattr(plotting, "save", lambda fig, path: figs.append(fig))
+    monkeypatch.setattr(
+        plotting, "save", lambda fig, path, **kw: figs.append(fig)
+    )
     points = [
         {
             "couple12": c12,

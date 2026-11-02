@@ -176,8 +176,20 @@ def markdown(results: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def plot(results: dict[str, Any], path: pathlib.Path) -> None:
-    """Draws the three curves of every arm, as path.png and path.pdf."""
+def plot(
+    results: dict[str, Any],
+    path: pathlib.Path,
+    data: dict[str, Any] | None = None,
+    args: dict[str, Any] | None = None,
+) -> None:
+    """Draws the three curves of every arm, as path.png and path.pdf.
+
+    Args:
+        results: Per arm, what measure_arm() returns (or its JSON).
+        path: Where to save the figure.
+        data: The JSON to write beside it (see plotting.save), or None.
+        args: The script's arguments, for the JSON.
+    """
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
     from msoaxon import plotting
@@ -221,7 +233,7 @@ def plot(results: dict[str, Any], path: pathlib.Path) -> None:
         *axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=2
     )
     fig.suptitle("Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)")
-    plotting.save(fig, path)
+    plotting.save(fig, path, data=data, args=args)
 
 
 def main() -> None:
@@ -245,7 +257,19 @@ def main() -> None:
         help="coarse grids, 20 ms trains and 3%% tolerance, three models: "
         "a smoke test, not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        plot(
+            json.loads(pathlib.Path(a.replot).read_text())["results"], a.replot
+        )
+        print(f"redrew {a.replot}")
+        return
     out = pathlib.Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -258,19 +282,18 @@ def main() -> None:
             print(summary(name, results[name]), flush=True)
     print()
     print(markdown(results))
-    plot(results, out / "resonance.png")
-    (out / "resonance.json").write_text(
-        json.dumps(
-            _clean(
-                {
-                    "mode": a.mode or "default",
-                    "quick": a.quick,
-                    "targets_hz": TARGETS,
-                    "results": results,
-                }
-            ),
-            indent=1,
-        )
+    plot(
+        results,
+        out / "resonance.png",
+        data=_clean(
+            {
+                "mode": a.mode or "default",
+                "quick": a.quick,
+                "targets_hz": TARGETS,
+                "results": results,
+            }
+        ),
+        args=vars(a),
     )
     print(f"saved {out}/resonance.png, .pdf and .json")
 

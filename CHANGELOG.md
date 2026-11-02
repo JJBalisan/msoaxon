@@ -16,6 +16,18 @@ same version as the package, bumped in the same release PR.
   `agg()`, `figure(width="single" | "double" | inches)` at 3.4 or 7.0 in,
   `save(fig, path)` writing PNG and PDF (SVG on request), `units()` (µs,
   MΩ), `panel_label()` and `threshold_ratio_panel()` (#137).
+- Every figure has a JSON that redraws it: `plotting.save(..., data=,
+  args=)` writes `<name>.json` beside the images, with a `meta` entry (the
+  script, its arguments, `git describe` or the package version, and the
+  model mode), and each plotting script takes `--replot JSON` to redraw
+  from it without simulating. The threshold sweeps write
+  `<stim>_thresholds_cpt<node>.json`; `somatic_spike.json` keeps the
+  traces, `dendrites.json` panel B's waveforms and panel E's curves, and
+  `combine_all.py --out` writes the runs it draws (thinned to at most 2000
+  samples, `plotting.thin`). Drawn arrays are rounded to 6 significant
+  digits (`plotting.compact`); results already in the JSON are not. The
+  dendrites figure names its variant (KLT setting, dendrite Ra) in its
+  title (#139).
 
 ### Changed
 

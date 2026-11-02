@@ -4,14 +4,21 @@
 stimType, inputNode, start, stop, I, Syn.
 
 Every figure comes from `figure()` (3.4 or 7.0 in wide, in the style of
-msoaxon.mplstyle) and is written by `save()` (PNG at 300 dpi plus PDF).
+msoaxon.mplstyle) and is written by `save()` (PNG at 300 dpi plus PDF, and
+with `data=` a JSON beside them that the script's --replot redraws from).
 Scripts that open worker pools import this module, and call `agg()`, only
 where they draw: pool workers re-import the running script, and only the
 main process needs matplotlib.
 """
 
+import functools
+import importlib.metadata
+import json
 import pathlib
 import re
+import shutil
+import subprocess
+import sys
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -21,7 +28,7 @@ import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 
-from msoaxon import _common, two
+from msoaxon import _common, _fast, two
 
 STYLE = pathlib.Path(__file__).with_name("msoaxon.mplstyle")
 # figure widths for a two-column paper [in]
@@ -82,29 +89,142 @@ def figure(
     return plt.figure(figsize=(w, 0.75 * w if height is None else height), **kw)
 
 
+@functools.lru_cache(maxsize=1)
+def version() -> str:
+    """Returns `git describe` of the checkout, else the package version.
+
+    The scripts run from a checkout; an installed package, a missing git
+    (the tests run scripts with PATH="") or a failing git falls back to
+    the version msoaxon was installed as.
+    """
+    git = shutil.which("git")
+    if git is not None:
+        try:
+            r = subprocess.run(  # noqa: S603 (fixed arguments, no shell)
+                [git, "describe", "--tags", "--always", "--dirty"],
+                cwd=pathlib.Path(__file__).parent,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            if r.stdout.strip():
+                return r.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return f"msoaxon {importlib.metadata.version('msoaxon')}"
+
+
+def compact(values: Any, digits: int = 6) -> Any:
+    """Rounds an array to `digits` significant digits, as nested lists.
+
+    For the arrays a figure draws (traces, waveforms) that its JSON keeps:
+    more digits than this are not visible, and the files are shared by
+    hand.
+
+    Args:
+        values: A number or an array-like of numbers.
+        digits: Significant digits kept.
+
+    Returns:
+        The rounded values, as a float or (nested) list; nan stays nan.
+    """
+    a = np.asarray(values, dtype=float)
+    flat = [float(f"{v:.{digits}g}") for v in a.ravel()]
+    return np.array(flat).reshape(a.shape).tolist()
+
+
+def thin(n: int, max_points: int = 2000) -> slice:
+    """Returns the stride that keeps at most max_points of n samples.
+
+    The solvers' adaptive steps cluster where the voltage moves, so a
+    uniform stride in sample index keeps the spikes' share of points; at
+    most about 2000 per trace is what a 7 in figure at 300 dpi shows.
+
+    Args:
+        n: The number of samples.
+        max_points: The most to keep.
+
+    Returns:
+        A slice for the time axis.
+    """
+    return slice(None, None, max(1, -(-n // max_points)))
+
+
+def meta(args: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Returns what a figure's JSON records about the run that made it.
+
+    Args:
+        args: The script's parsed arguments (vars(namespace)).
+
+    Returns:
+        dict(script, args, version, mode): the script's file name, its
+        arguments (paths as strings), version() and the model mode the
+        run used.
+    """
+    args = {
+        k: str(v) if isinstance(v, pathlib.PurePath) else v
+        for k, v in (args or {}).items()
+    }
+    return {
+        "script": pathlib.Path(sys.argv[0]).name,
+        "args": args,
+        "version": version(),
+        "mode": _fast.effective(args.get("mode")),
+    }
+
+
 def save(
-    fig: matplotlib.figure.Figure, path: str | pathlib.Path, svg: bool = False
+    fig: matplotlib.figure.Figure,
+    path: str | pathlib.Path,
+    svg: bool = False,
+    data: dict[str, Any] | None = None,
+    args: dict[str, Any] | None = None,
 ) -> list[pathlib.Path]:
     """Writes a figure as PNG and PDF (and SVG on request), then closes it.
+
+    This is the only place a figure is written. With `data`, it also
+    writes `<name>.json` beside the images: the data plus a "meta" entry
+    (see meta()), which the script's --replot reads to redraw the figure
+    without simulating.
 
     Args:
         fig: The figure.
         path: The file name without its extension; a .png, .pdf or .svg
-            suffix is dropped, so `out.png` writes out.png and out.pdf.
+            (or .json) suffix is dropped, so `out.png` writes out.png and
+            out.pdf.
         svg: Also write an SVG.
+        data: What the figure draws (and any results kept with it), as
+            JSON-ready values; None writes no JSON (a replot).
+        args: The script's arguments, recorded in the JSON's meta.
 
     Returns:
-        The paths written, PNG first.
+        The paths written, PNG first (the JSON last).
     """
     base = pathlib.Path(path)
-    if base.suffix.lower() in _FORMATS:
+    if base.suffix.lower() in (*_FORMATS, ".json"):
         base = base.with_suffix("")
     kinds = ("png", "pdf", "svg") if svg else ("png", "pdf")
     paths = [base.with_name(f"{base.name}.{kind}") for kind in kinds]
     for p in paths:
         fig.savefig(p)
     plt.close(fig)
+    if data is not None:
+        paths.append(base.with_name(f"{base.name}.json"))
+        paths[-1].write_text(json.dumps({**data, "meta": meta(args)}, indent=1))
     return paths
+
+
+def load(path: str | pathlib.Path) -> dict[str, Any]:
+    """Reads a figure's JSON (see save()) for a replot.
+
+    Args:
+        path: The JSON, or its figure (same name, .json beside it).
+
+    Returns:
+        The data, with its "meta" entry.
+    """
+    return json.loads(pathlib.Path(path).with_suffix(".json").read_text())
 
 
 def units(label: str, unit: str) -> str:
