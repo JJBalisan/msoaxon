@@ -87,6 +87,28 @@ def check_args(
         )
 
 
+def check_times(t_end: float, max_step: float | None) -> None:
+    """Rejects a run length or solver step that is not > 0.
+
+    Without it t_end <= 0 fails deep inside scipy or returns a
+    two-point trace, and mso_axon's max_step=0 silently became its
+    default.
+
+    Args:
+        t_end: End time [ms].
+        max_step: Largest solver step [ms], or None for the model's
+            default.
+
+    Raises:
+        ValueError: If t_end, or max_step when given, is not > 0 (nan
+            included).
+    """
+    if not t_end > 0:
+        raise ValueError(f"t_end must be > 0, got {t_end!r}")
+    if max_step is not None and not max_step > 0:
+        raise ValueError(f"max_step must be > 0, got {max_step!r}")
+
+
 @dataclasses.dataclass(frozen=True, eq=False)
 class Stimulus:
     """The stimulus settings of one run (what TwoCpt.m stored on P).
