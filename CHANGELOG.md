@@ -6,8 +6,14 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
-## Unreleased
+## 1.10.0 (2 Nov 2026)
 
+The figures are redrawn to one style (#137): paper-width PNG plus PDF,
+one model-to-colour map, units on every axis (#138), no non-measurement
+drawn as data (#136), a JSON beside every figure that `--replot` redraws
+(#139), a reproducible threshold composite (#140) and trace figures that
+mark the compared values (#141). Arguments no cell or search can use now
+raise a `ValueError` (#72), and `describe()` names `klt_to_leak` (#129).
 No published number moves: every input that is now refused used to fail
 or return a meaningless result, and the golden traces are bit-identical.
 
