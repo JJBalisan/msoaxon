@@ -1,18 +1,159 @@
-"""Figures (port of Graphing.m).
+"""Figures (port of Graphing.m) and the style every script draws with.
 
 `graph` is a dict with the same keys as the MATLAB struct: Type, node, tEnd,
 stimType, inputNode, start, stop, I, Syn.
+
+Every figure comes from `figure()` (3.4 or 7.0 in wide, in the style of
+msoaxon.mplstyle) and is written by `save()` (PNG at 300 dpi plus PDF).
+Scripts that open worker pools import this module, and call `agg()`, only
+where they draw: pool workers re-import the running script, and only the
+main process needs matplotlib.
 """
 
-from collections.abc import Sequence
+import pathlib
+from collections.abc import Iterable, Sequence
 from typing import Any
 
+import matplotlib as mpl
 import matplotlib.axes
 import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 
 from msoaxon import _common, two
+
+STYLE = pathlib.Path(__file__).with_name("msoaxon.mplstyle")
+# figure widths for a two-column paper [in]
+WIDTHS = {"single": 3.4, "double": 7.0}
+# units as the scripts spell them in ASCII, and the glyphs a figure shows
+_GLYPHS = {"us": "\N{MICRO SIGN}s", "MOhm": "M\N{GREEK CAPITAL LETTER OMEGA}"}
+_FORMATS = (".png", ".pdf", ".svg")
+
+
+def use_style() -> None:
+    """Applies msoaxon.mplstyle to matplotlib's rcParams."""
+    plt.style.use(STYLE)
+
+
+def agg() -> None:
+    """Selects the non-interactive Agg backend and applies the style.
+
+    The scripts that only write files call this where they draw, after
+    importing this module there (not at the top of the script; see the
+    module docstring).
+    """
+    mpl.use("Agg")
+    use_style()
+
+
+def figure(
+    width: str | float = "double", height: float | None = None, **kw: Any
+) -> matplotlib.figure.Figure:
+    """Returns an empty figure at a paper width, in the shared style.
+
+    Args:
+        width: "single" (3.4 in, one column), "double" (7.0 in, the page)
+            or a width in inches.
+        height: The height [in]; default three quarters of the width.
+        **kw: Passed to matplotlib.pyplot.figure.
+
+    Returns:
+        The figure, with constrained layout (from the style).
+    """
+    use_style()
+    w = WIDTHS[width] if isinstance(width, str) else float(width)
+    return plt.figure(figsize=(w, 0.75 * w if height is None else height), **kw)
+
+
+def save(
+    fig: matplotlib.figure.Figure, path: str | pathlib.Path, svg: bool = False
+) -> list[pathlib.Path]:
+    """Writes a figure as PNG and PDF (and SVG on request), then closes it.
+
+    Args:
+        fig: The figure.
+        path: The file name without its extension; a .png, .pdf or .svg
+            suffix is dropped, so `out.png` writes out.png and out.pdf.
+        svg: Also write an SVG.
+
+    Returns:
+        The paths written, PNG first.
+    """
+    base = pathlib.Path(path)
+    if base.suffix.lower() in _FORMATS:
+        base = base.with_suffix("")
+    kinds = ("png", "pdf", "svg") if svg else ("png", "pdf")
+    paths = [base.with_name(f"{base.name}.{kind}") for kind in kinds]
+    for p in paths:
+        fig.savefig(p)
+    plt.close(fig)
+    return paths
+
+
+def units(label: str, unit: str) -> str:
+    """Returns an axis label with its unit, e.g. "Delay (\N{MICRO SIGN}s)".
+
+    Args:
+        label: The quantity.
+        unit: Its unit; "us" and "MOhm" become their glyphs, anything else
+            (pA, nS, ms, Hz, mV) is used as it is.
+
+    Returns:
+        "label (unit)".
+    """
+    return f"{label} ({_GLYPHS.get(unit, unit)})"
+
+
+def panel_label(ax: matplotlib.axes.Axes, letter: str) -> None:
+    """Writes a bold panel letter just above an axes' top-left corner.
+
+    Args:
+        ax: The panel.
+        letter: Its label, e.g. "A".
+    """
+    ax.annotate(
+        letter,
+        xy=(0, 1),
+        xycoords="axes fraction",
+        xytext=(-32, 4),
+        textcoords="offset points",
+        fontweight="bold",
+        fontsize=9,
+        va="bottom",
+    )
+
+
+def threshold_ratio_panel(
+    ax: matplotlib.axes.Axes,
+    delays_ms: np.ndarray | Sequence[float],
+    curves: Iterable[tuple[np.ndarray | Sequence[float], dict[str, Any]]],
+    margins: Sequence[float] = (0.03,),
+) -> None:
+    """Draws EPSG-pair thresholds over the coincident one against delay.
+
+    The panel coincidence_window.py (A) and dendrites.py (E) share: each
+    curve divided by its zero-delay threshold, with a dotted line at
+    1 + margin for each input margin.
+
+    Args:
+        ax: The panel.
+        delays_ms: The delays between the EPSGs [ms]; the first is 0.
+        curves: (thresholds at those delays, keywords for ax.plot) per
+            curve.
+        margins: The input margins to mark (0.03 is 3% above the
+            coincident threshold).
+    """
+    x = np.asarray(delays_ms) * 1e3
+    for curve, kw in curves:
+        th = np.asarray(curve)
+        ax.plot(x, th / th[0], **kw)
+    for m in margins:
+        ax.axhline(1 + m, color="0.5", lw=0.8, ls=":")
+    ax.set(
+        xlabel=units("Delay between EPSGs", "us"),
+        ylabel="Threshold / coincident threshold",
+        ylim=(0.98, 2.05),
+    )
 
 
 def _panel(
@@ -24,9 +165,10 @@ def _panel(
     t_end: float,
     ylabel: str = "Voltage (mV)",
 ) -> None:
-    ax.plot(t, V, linewidth=2)
+    ax.plot(t, V)
     ax.set_title(title)
-    ax.legend(labels, fontsize=8, frameon=False)
+    if labels:
+        ax.legend(labels)
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel(ylabel)
     ax.set_xlim(0, t_end)
@@ -105,7 +247,7 @@ def graphing(
         ValueError: For an unknown graph Type.
     """
     node, t_end, kind = graph["node"], graph["tEnd"], graph["Type"]
-    fig = plt.figure(figsize=(9, 7))
+    fig = figure("double", height=5.5)
 
     if kind == "Contour":
         ax = fig.add_subplot(projection="3d")
@@ -154,9 +296,9 @@ def graphing(
     elif kind == "NodeComparison":
         a1, a2 = fig.subplots(2, 1)
         labels = ["Multi-Compartment", "2 Compartment"]
-        a1.plot(t1, y[:, 0], linewidth=2)
+        a1.plot(t1, y[:, 0])
         _panel(a1, t2, x[:, 0], "Soma", labels, t_end)
-        a2.plot(t1, y[:, node - 1], linewidth=2)
+        a2.plot(t1, y[:, node - 1])
         _panel(a2, t2, x[:, 1], f"node {node}", labels, t_end)
         fig.suptitle(f"Comparison of Soma and node {node}")
 
@@ -233,9 +375,9 @@ def graphing(
         )
 
     else:
+        plt.close(fig)
         raise ValueError(f"unknown graph Type {kind!r}")
 
-    fig.tight_layout()
     return fig
 
 
@@ -258,9 +400,10 @@ def threshold_figure(
     Returns:
         The matplotlib figure.
     """
-    fig, ax = plt.subplots()
-    ax.plot(x_values, multi, linewidth=2, label="Multi-Compartment")
-    ax.plot(x_values, two, linewidth=2, label="Two-Compartment")
+    fig = figure("single", height=2.6)
+    ax = fig.subplots()
+    ax.plot(x_values, multi, label="Multi-Compartment")
+    ax.plot(x_values, two, label="Two-Compartment")
     ax.set(title=title, xlabel=xlabel, ylabel="Threshold")
-    ax.legend(fontsize=8, frameon=False)
+    ax.legend()
     return fig

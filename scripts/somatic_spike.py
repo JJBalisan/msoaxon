@@ -10,6 +10,7 @@ rebalanced so the cell doesn't fire spontaneously.
 import argparse
 import json
 import pathlib
+import textwrap
 
 from msoaxon import multi, somatic
 
@@ -45,12 +46,11 @@ def main() -> None:
 
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, len(CASES), figsize=(15, 4.2), sharey=True)
+    plotting.agg()
+    fig = plotting.figure("double", height=2.8)
+    axes = fig.subplots(1, len(CASES), sharey=True)
     results = {}
     for ax, (name, (model, knobs)) in zip(axes, CASES.items(), strict=True):
         mem = multi.membrane(-68.0, **knobs) if knobs else None
@@ -74,22 +74,13 @@ def main() -> None:
                 }
             )
             keep = t >= 4.8
-            ax.plot(
-                t[keep],
-                x[keep, 0],
-                lw=1.5,
-                label=f"{k}x: {r['amplitude']:.1f} mV",
-            )
-            ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=7)
+            ax.plot(t[keep], x[keep, 0], label=f"{k}x: {r['amplitude']:.1f} mV")
+            ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=5)
         results[name] = {"rheobase_pA": float(rb), "spikes": rows}
-        ax.set_title(f"{name}\nrheobase {rb:.0f} pA", fontsize=9.5)
+        # wrapped: three long titles side by side on a 7 in figure
+        ax.set_title(f"{textwrap.fill(name, 30)}\nrheobase {rb:.0f} pA")
         ax.set_xlabel("Time (ms)")
-        ax.legend(
-            fontsize=8,
-            frameon=False,
-            title="amplitude from inflection (dot)",
-            title_fontsize=7.5,
-        )
+        ax.legend(title="amplitude from inflection (dot)")
         print(
             f"{name}: rheobase {rb:.0f} pA; "
             + ", ".join(
@@ -100,13 +91,11 @@ def main() -> None:
     axes[0].set_ylabel("Soma voltage (mV)")
     fig.suptitle(
         "Somatic spike, 100 ms step (Scott et al 2005 protocol). "
-        "Mature MSO: 17 ± 2 mV; dendrotoxin: 15 → 37 mV",
-        fontsize=11,
+        "Mature MSO: 17 ± 2 mV; dendrotoxin: 15 → 37 mV"
     )
-    fig.tight_layout()
-    fig.savefig(out / "somatic_spike.png", dpi=130)
+    plotting.save(fig, out / "somatic_spike")
     (out / "somatic_spike.json").write_text(json.dumps(results, indent=1))
-    print(f"saved {out}/somatic_spike.png and .json")
+    print(f"saved {out}/somatic_spike.png, .pdf and .json")
 
 
 if __name__ == "__main__":

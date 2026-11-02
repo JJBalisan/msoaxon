@@ -66,7 +66,10 @@ def main() -> None:
         help="ModelComparison, NodeComparison, MultiCompartment, Contour, "
         "Input, Multigraph, ModelComparison2",
     )
-    ap.add_argument("--out", help="save the figure here instead of showing it")
+    ap.add_argument(
+        "--out",
+        help="save the figure here (PNG and PDF) instead of showing it",
+    )
     a = ap.parse_args()
 
     stop, I = DEFAULTS[a.stim]
@@ -111,9 +114,9 @@ def main() -> None:
         "Syn": syn,
     }
     fig = plotting.graphing(graph, t1, y, t2, x, t3, z)
-    if a.out:
-        fig.savefig(a.out, dpi=150)
-        print(f"saved {a.out}")
+    if a.out:  # out.png writes out.png and out.pdf
+        for path in plotting.save(fig, a.out):
+            print(f"saved {path}")
     else:
         plt.show()
 
