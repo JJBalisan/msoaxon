@@ -10,6 +10,7 @@ written and where numpy and Rust call the same libm. Those tests need the
 fake or hide the extension).
 """
 
+import dataclasses
 import multiprocessing
 import os
 import platform
@@ -490,7 +491,8 @@ def no_env(monkeypatch):
 def fake_ext(monkeypatch, no_env):
     """Pretends the extension is installed; its RHS is multi._rhs.
 
-    Records (mode, stim_type) per build; a fake native RHS has no
+    Records (mode, stim_type) per build, ("two " + mode, stim_type) for
+    two_cpt's (whose RHS is two._rhs); a fake native RHS has no
     `segment`, so scipy integrates it.
     """
     built = []
@@ -506,9 +508,18 @@ def fake_ext(monkeypatch, no_env):
 
         return build
 
+    def two_builder(mode):
+        def build(stim_type, s, params):
+            built.append((f"two {mode}", stim_type))
+            return lambda t, x: np.array(two._rhs(t, x, params, stim_type, s))
+
+        return build
+
     monkeypatch.setattr(_fast, "_ext", object())
     monkeypatch.setattr(_fast, "build", builder("fast"))
     monkeypatch.setattr(_fast, "build_native", builder("native"))
+    monkeypatch.setattr(_fast, "build_two", two_builder("fast"))
+    monkeypatch.setattr(_fast, "build_two_native", two_builder("native"))
     return built
 
 
@@ -585,14 +596,21 @@ def test_mode_is_part_of_the_quiet_cache_key(fake_ext, fresh_quiet_cache):
     assert modes == ["exact", "fast"]
 
 
-def test_run_model_passes_mode_to_multi_only(fake_ext):
+def test_run_model_passes_mode_to_both_models(fake_ext):
     args = ("EPSGpair", 5, 5.1, 30, 3, 8, -68.0, 1)
     _dispatch.run_model("multi", *args, mode="fast")
     assert fake_ext == [("fast", "EPSGpair"), ("fast", "none")]
     _dispatch.run_model("multi", *args, mode="exact")
-    _dispatch.run_model("two", *args, mode="fast")  # no fast two_cpt: ignored
-    _dispatch.run_model("two", *args)  # nor a native one
-    assert fake_ext == [("fast", "EPSGpair"), ("fast", "none")]
+    _dispatch.run_model("two", *args, mode="exact")
+    assert len(fake_ext) == 2
+    _dispatch.run_model("two", *args, mode="fast")
+    _dispatch.run_model("two", *args)  # the default: native
+    assert fake_ext[2:] == [
+        ("two fast", "EPSGpair"),
+        ("two fast", "none"),
+        ("two native", "EPSGpair"),
+        ("two native", "none"),
+    ]
 
 
 def test_pool_workers_inherit_the_mode_env(monkeypatch, no_env):
@@ -1002,3 +1020,230 @@ def test_a_bare_default_run_issues_the_native_warning(monkeypatch):
     assert len(drift) == 1
     assert "Rust BDF integrator" in str(drift[0].message)
     assert _fast._STATE == {"warned": False, "warned_native": True}
+
+
+# --- the two-compartment model ------------------------------------------------
+
+# more than 8 events on each compartment, so i[soma].sum() is numpy's
+# pairwise sum rather than a plain loop
+EVENTS_MANY = tuple(
+    synaptic.Event(4.5 + 0.05 * i, 1 if i % 3 else 3 + i % 2, 4.0 + i)
+    for i in range(30)
+)
+# (stim, start, stop, I, SynParams keywords)
+TWO_STIMULI = {
+    "step": ("step", 5, 10, 3000, {}),
+    "ramp": ("ramp", 5, 5.5, 3000, {}),
+    "ramp2": ("ramp2", 4, 5.5, 3000, {}),  # starts at 5 whatever start is
+    "sine": ("sine", 5, 7.5, 3000, {}),
+    "Synaptic": ("Synaptic", 5, 15, 0, {"random_in": 1396}),
+    "SynapticPair": ("SynapticPair", 5, 15, 0, {"diff": 1.0}),
+    "EPSG": ("EPSG", 5, 10, 108, {}),
+    "EPSGpair": ("EPSGpair", 5, 5.2, 100, {}),
+    "Events": ("Events", 0, 0, 1.0, {"events": EVENTS}),
+    "Events/many": ("Events", 0, 0, 1.0, {"events": EVENTS_MANY}),
+}
+# (node, model_type, get_params keywords): the quirks get_params settles
+TWO_PARAMS = {
+    "default": (3, "active-full", {}),
+    "Active-sodium": (5, "Active-sodium", {}),  # TwoCpt.m's spelling
+    "active-sodium": (3, "active-sodium", {}),  # so: no Na here
+    "klt-to-leak": (4, "active-KLT+H", {"klt_to_leak": "slope"}),
+    "na-vhalf/goldwyn": (
+        3,
+        "active-full",
+        {"soma_na_vhalf": -77, "r1": 8.5, "tau_est": 0.34},
+    ),
+}
+
+
+def two_setup(stim_name, params_name, input_node):
+    """Returns (rhs args after t, x; the times worth sampling)."""
+    stim, start, stop, amp, syn_kw = TWO_STIMULI[stim_name]
+    node, mt, kw = TWO_PARAMS[params_name]
+    syn = synaptic.SynParams(t_end=20.0, **syn_kw)
+    s = _common.stimulus(stim, start, stop, amp, 20.0, syn)
+    P = two.get_params(-68.0, node, input_node, mt, **kw)
+    edges = [start, stop, 5.0, 0.0, start + 1 / (s.slope or 1)]
+    times = [e + d for e in edges for d in (0.0, -1e-9, 1e-9)]
+    if s.events is not None:
+        times += [t + d for t in s.events["t"] for d in (0.0, -1e-9, 1e-9)]
+    times += list(np.random.default_rng(len(stim_name)).uniform(0, 20, 12))
+    if stim in ("Synaptic", "SynapticPair"):
+        times += list(s.t_syn[500:1500:97])
+    return (P, stim, s), times
+
+
+def two_states(rng, count):
+    """Random two_cpt states: V in -90..40 mV, gates in 0..1, plus rest."""
+    out = [np.concatenate([[-68.0, -68.0], np.full(9, 0.3)])]
+    for _ in range(count):
+        out.append(np.concatenate([rng.uniform(-90, 40, 2), rng.random(9)]))
+    return out
+
+
+def assert_two_same(got, want):
+    if BITWISE:
+        np.testing.assert_array_equal(got, want)
+        return
+    for block in (slice(0, 2), slice(2, 11)):
+        g, w = got[block], want[block]
+        np.testing.assert_allclose(
+            g, w, rtol=1e-12, atol=1e-12 * float(np.max(np.abs(w)))
+        )
+
+
+@needs_ext
+@pytest.mark.parametrize("input_node", [1, 3])
+@pytest.mark.parametrize("params_name", sorted(TWO_PARAMS))
+@pytest.mark.parametrize("stim_name", sorted(TWO_STIMULI))
+def test_rust_two_rhs_matches_numpy(stim_name, params_name, input_node):
+    (P, stim, s), times = two_setup(stim_name, params_name, input_node)
+    fast = _fast._build_two(stim, s, P)
+    rng = np.random.default_rng(13)
+    for t in times:
+        for x in two_states(rng, 3):
+            want = np.array(two._rhs(float(t), x, P, stim, s))
+            assert_two_same(fast(float(t), x), want)
+
+
+@needs_ext
+def test_rust_two_rhs_matches_numpy_dv():
+    # the settled stop slices the Rust RHS where exact mode calls two._dv
+    (P, stim, s), times = two_setup("EPSGpair", "default", 3)
+    fast = _fast._build_two(stim, s, P)
+    for t in times:
+        for x in two_states(np.random.default_rng(5), 3):
+            want = np.array(two._dv(float(t), x, P, stim, s))
+            got = fast(float(t), x)[:2]
+            if BITWISE:
+                np.testing.assert_array_equal(got, want)
+            else:
+                np.testing.assert_allclose(got, want, rtol=1e-12)
+
+
+@needs_ext
+def test_rust_two_rhs_rejects_a_wrong_state_or_parameter():
+    (P, stim, s), _ = two_setup("EPSG", "default", 1)
+    fast = _fast._build_two(stim, s, P)
+    with pytest.raises(ValueError, match="x has 12 entries, expected 11"):
+        fast(5.0, np.zeros(12))
+    with pytest.raises(ValueError, match='unknown two_cpt parameter "new"'):
+        _fast._ext.TwoCptRhs(
+            params={**dataclasses.asdict(P), "new": 1.0},
+            gating=_fast._gating(),
+            stim_type="none",
+        )
+
+
+TWO_RUNS = [
+    (name, 1) for name in sorted(TWO_STIMULI) if not name.startswith("Ev")
+] + [("EPSG", 3), ("EPSGpair", 3), ("Synaptic", 3), ("Events/many", 1)]
+
+
+@needs_ext
+@pytest.mark.skipif(not BITWISE, reason="bit-identical on darwin-arm64 only")
+@pytest.mark.parametrize(("stim_name", "input_node"), TWO_RUNS)
+def test_two_runs_are_bit_identical_here(stim_name, input_node, quiet_native):
+    stim, start, stop, amp, syn_kw = TWO_STIMULI[stim_name]
+    syn = synaptic.SynParams(t_end=15.0, **syn_kw)
+    args = (stim, start, stop, amp, 3, "active-full", 15.0, -68.0, input_node)
+    t1, y1 = two.two_cpt(*args, syn=syn, mode="exact")
+    t2, y2 = two.two_cpt(*args, syn=syn, mode="fast")
+    np.testing.assert_array_equal(t1, t2)
+    np.testing.assert_array_equal(y1, y2)
+
+
+# Open (#108, for JJ): with the input in the axon compartment these three
+# exceed multi's tolerance below by up to 2.3x, at one sample each on an
+# upstroke (0.0125 mV at most). Against a run at rtol 1e-10 both modes are
+# off by the same order at their own steps (exact 0.0017 / 0.0044 / 0.0015
+# mV, native 0.0017 / 0.0041 / 0.0029): two_cpt integrates at TwoCpt.m's
+# rtol = atol = 1e-6, multi at 1e-8. Not loosened. Not strict either: the
+# EPSG-pair case is over by only 1%, so another platform may pass it.
+TWO_DRIFT = pytest.mark.xfail(
+    strict=False, reason="beyond multi's tolerance at two_cpt's rtol 1e-6"
+)
+TWO_NATIVE_RUNS = [
+    pytest.param(*run, marks=TWO_DRIFT) if run[1] == 3 else run
+    for run in TWO_RUNS
+]
+
+
+@needs_ext
+@pytest.mark.parametrize(("stim_name", "input_node"), TWO_NATIVE_RUNS)
+def test_two_native_matches_exact(stim_name, input_node, quiet_native):
+    # the golden traces' tolerance (tests/test_golden.py), as multi's
+    # native mode is held to
+    stim, start, stop, amp, syn_kw = TWO_STIMULI[stim_name]
+    syn = synaptic.SynParams(t_end=15.0, **syn_kw)
+    args = (stim, start, stop, amp, 3, "active-full", 15.0, -68.0, input_node)
+    t_e, x_e = two.two_cpt(*args, syn=syn, mode="exact")
+    t_n, x_n = two.two_cpt(*args, syn=syn, mode="native")
+    assert t_n[-1] == t_e[-1] == 15
+    assert np.max(np.diff(t_n)) <= two.MAX_STEP + 1e-12
+    times = np.linspace(0, 15, 151)
+    for col in (0, 1):
+        np.testing.assert_allclose(
+            np.interp(times, t_n, x_n[:, col]),
+            np.interp(times, t_e, x_e[:, col]),
+            rtol=1e-4,
+            atol=5e-3,
+        )
+
+
+@needs_ext
+def test_two_native_spike_stop_agrees_with_scipys_event(quiet_native):
+    args = ("EPSGpair", 5, 5.2, 100, 3, "active-full", 20, -68.0, 1)
+    kw = {"stop_on_spike": 20.0}
+    t_f, x_f = two.two_cpt(*args, mode="fast", **kw)
+    t_n, x_n = two.two_cpt(*args, mode="native", **kw)
+    assert t_f[-1] < 20 and t_n[-1] < 20
+    np.testing.assert_allclose(x_n[-1], x_f[-1], rtol=0, atol=1e-4)
+    assert abs(x_n[-1, 1] - x_n[-1, 0] - 20.0) < 1e-6
+
+
+@needs_ext
+@pytest.mark.xfail(
+    strict=True,
+    reason="4.6e-6 ms apart at two_cpt's rtol 1e-6; multi's bound is for 1e-8",
+)
+def test_two_native_spike_time_within_multis_bound(quiet_native):
+    # open (#108, for JJ): multi's 1e-6 ms, not loosened
+    args = ("EPSGpair", 5, 5.2, 100, 3, "active-full", 20, -68.0, 1)
+    kw = {"stop_on_spike": 20.0}
+    t_f, _ = two.two_cpt(*args, mode="fast", **kw)
+    t_n, _ = two.two_cpt(*args, mode="native", **kw)
+    assert abs(t_n[-1] - t_f[-1]) < 1e-6
+
+
+@needs_ext
+def test_two_native_settled_stop_ends_a_subthreshold_run(quiet_native):
+    kw = {"stop_on_spike": 20.0, "stop_when_settled": True}
+    args = ("EPSGpair", 5, 5.2, 30, 3, "active-full", 40, -68.0, 1)
+    t, x = two.two_cpt(*args, mode="native", **kw)
+    t_off = 5.2 + _solve.EPSG_TAIL * max(synaptic.EPSG_TAU)
+    assert t_off <= t[-1] < 40
+    assert x[-1, 1] - x[-1, 0] < 20.0 * _solve.SETTLED_FRACTION
+
+
+@needs_ext
+def test_two_native_caps_the_first_step_from_rest(quiet_native):
+    # two_cpt starts at its exact rest, where diffsol's initial-step
+    # heuristic proposes a step past max_step; capped, the axonal EPSG at
+    # 5 ms is not stepped over
+    args = ("EPSG", 5, 10, 108, 3, "active-full", 15, -68.0, 3)
+    t, x = two.two_cpt(*args, mode="native")
+    assert np.max(np.diff(t)) <= two.MAX_STEP + 1e-12
+    assert x[:, 1].max() > 0  # it spikes, as in exact mode
+
+
+@needs_ext
+def test_two_quiet_cache_key_has_the_mode(
+    fresh_quiet_cache, quiet_native, monkeypatch
+):
+    monkeypatch.setitem(_fast._STATE, "warned", True)
+    for mode in ("exact", "fast", "native"):
+        two.two_cpt(*EPSG8, mode=mode)
+    modes = sorted(k[0][-1] for k in _solve._QUIET_CACHE)
+    assert modes == ["exact", "fast", "native"]

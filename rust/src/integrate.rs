@@ -1,4 +1,5 @@
-//! The BDF integrator of `mode="native"`: diffsol 0.18 over [`MultiRhs`].
+//! The BDF integrator of `mode="native"`: diffsol 0.18 over [`MultiRhs`]
+//! or [`TwoCptRhs`] (any [`Model`]).
 //!
 //! Plain Rust, no pyo3. [`Integrator`] is built once per right-hand side
 //! (the Jacobian pattern, where its analytic values go, and the diffsol
@@ -14,7 +15,9 @@
 //! one, by NaN probes); the Jacobian is filled analytically
 //! ([`MultiRhs::jacobian`]; `Jv` products stay forward differences), and
 //! the Newton matrix I - cJ is solved directly on that pattern's structure
-//! ([`TreeLu`]), with faer's sparse LU as the fall-back.
+//! ([`TreeLu`]), with faer's sparse LU as the fall-back. The
+//! two-compartment model (11 states, [`crate::two::jac_sparsity`]) has its
+//! analytic Jacobian too and goes to faer's sparse LU directly.
 //! `max_step` is not a diffsol option: it is emulated by narrowing the
 //! controller's growth bounds before every step, so that no step is
 //! proposed past it, with a stop-time hop as the fallback when a step
@@ -36,11 +39,72 @@ use diffsol::{
 use diffsol_la::{LinearOp, LinearSolver as LaLinearSolver};
 
 use crate::core::{tree_jac_sparsity, CoreError, MultiRhs};
+use crate::two::TwoCptRhs;
 
 type M = FaerSparseMat<f64>;
 type V = FaerVec<f64>;
 type C = FaerContext;
-type LS = TreeLu;
+
+/// A right-hand side the integrator can solve: its values, its analytic
+/// Jacobian on a fixed pattern, and the linear solver for its Newton matrix.
+pub trait Model: Clone + Send + 'static {
+    /// The solver of the Newton matrix I - cJ.
+    type Ls: LaLinearSolver<M>;
+    /// The number of states.
+    fn nstates(&self) -> usize;
+    /// The number of voltages, the leading states: every one must fall
+    /// for the settled event.
+    fn nv(&self) -> usize;
+    /// Writes dx/dt at (t, x) into `out`.
+    fn eval(&self, t: f64, x: &[f64], out: &mut [f64]);
+    /// Writes the Jacobian's values at (t, x), in [`pattern`](Self::pattern)
+    /// order.
+    fn jacobian(&self, t: f64, x: &[f64], out: &mut [f64]);
+    /// The Jacobian pattern (rows, cols), column-major, each entry once.
+    fn pattern(&self) -> (Vec<usize>, Vec<usize>);
+}
+
+impl Model for MultiRhs {
+    type Ls = TreeLu;
+    fn nstates(&self) -> usize {
+        7 * self.n()
+    }
+    fn nv(&self) -> usize {
+        self.n()
+    }
+    fn eval(&self, t: f64, x: &[f64], out: &mut [f64]) {
+        MultiRhs::eval(self, t, x, out);
+    }
+    fn jacobian(&self, t: f64, x: &[f64], out: &mut [f64]) {
+        MultiRhs::jacobian(self, t, x, out);
+    }
+    fn pattern(&self) -> (Vec<usize>, Vec<usize>) {
+        let (parent, child) = self.edges();
+        tree_jac_sparsity(self.n(), parent, child)
+    }
+}
+
+/// 11 states: faer's LU is cheap, and the tree solver's shape (six gates
+/// per compartment) is not this model's.
+impl Model for TwoCptRhs {
+    type Ls = FaerSparseLU<f64>;
+    fn nstates(&self) -> usize {
+        crate::two::NSTATES
+    }
+    fn nv(&self) -> usize {
+        2
+    }
+    fn eval(&self, t: f64, x: &[f64], out: &mut [f64]) {
+        TwoCptRhs::eval(self, t, x, out);
+    }
+    fn jacobian(&self, t: f64, x: &[f64], out: &mut [f64]) {
+        TwoCptRhs::jacobian(self, t, x, out);
+    }
+    fn pattern(&self) -> (Vec<usize>, Vec<usize>) {
+        let (rows, cols) = TwoCptRhs::pattern(self);
+        (rows.to_vec(), cols.to_vec())
+    }
+}
 
 /// The initial step of every segment [ms] (diffsol's own guess would
 /// differ from scipy's; a small fixed one lets the error control grow it).
@@ -88,8 +152,8 @@ fn err(e: impl Into<DiffsolError>) -> CoreError {
 
 /// The equations diffsol solves: the right-hand side, its pattern, and the
 /// events of the current run.
-struct Eqn {
-    rhs: MultiRhs,
+struct Eqn<R: Model> {
+    rhs: R,
     events: Events,
     nstates: usize,
     y0: V,
@@ -106,7 +170,7 @@ struct Eqn {
     scratch: RefCell<[Vec<f64>; 2]>,
 }
 
-impl Eqn {
+impl<R: Model> Eqn<R> {
     /// `J v` by one forward difference on two `eval` calls, with the step
     /// 1e-7 (1 + max |x|) of the diffsol prototypes (issue #28).
     fn jv(&self, x: &[f64], t: f64, v: &[f64], y: &mut [f64]) {
@@ -134,7 +198,7 @@ impl Eqn {
             if t >= s.t_off && x[s.axon_col] - x[0] < s.threshold {
                 let [dx, _] = &mut *self.scratch.borrow_mut();
                 self.rhs.eval(t, x, dx);
-                if dx[..self.rhs.n()].iter().all(|d| *d < 0.0) {
+                if dx[..self.rhs.nv()].iter().all(|d| *d < 0.0) {
                     g[1] = 1.0;
                 }
             }
@@ -143,15 +207,15 @@ impl Eqn {
 }
 
 /// The right-hand side operator.
-struct Rhs<'a>(&'a Eqn);
+struct Rhs<'a, R: Model>(&'a Eqn<R>);
 /// The initial-state operator (unused: every segment sets its own state).
-struct Init<'a>(&'a Eqn);
+struct Init<'a, R: Model>(&'a Eqn<R>);
 /// The two root functions.
-struct Root<'a>(&'a Eqn);
+struct Root<'a, R: Model>(&'a Eqn<R>);
 
 macro_rules! impl_op {
-    ($ty:ident, $nout:expr) => {
-        impl Op for $ty<'_> {
+    ($ty:ident, $e:ident => $nout:expr) => {
+        impl<R: Model> Op for $ty<'_, R> {
             type T = f64;
             type V = V;
             type M = M;
@@ -163,7 +227,8 @@ macro_rules! impl_op {
                 self.0.nstates
             }
             fn nout(&self) -> usize {
-                $nout(self.0)
+                let $e = self.0;
+                $nout
             }
             fn nparams(&self) -> usize {
                 0
@@ -172,18 +237,18 @@ macro_rules! impl_op {
     };
 }
 
-impl_op!(Rhs, |e: &Eqn| e.nstates);
-impl_op!(Init, |e: &Eqn| e.nstates);
-impl_op!(Root, |_: &Eqn| 2);
+impl_op!(Rhs, e => e.nstates);
+impl_op!(Init, e => e.nstates);
+impl_op!(Root, _e => 2);
 
-impl NonLinearOp for Rhs<'_> {
+impl<R: Model> NonLinearOp for Rhs<'_, R> {
     fn call_inplace(&self, x: &V, t: f64, y: &mut V) {
         let rhs = &self.0.rhs;
         y.for_each_batch_host([x], |y, [x], _| rhs.eval(t, x, y));
     }
 }
 
-impl NonLinearOpJacobian for Rhs<'_> {
+impl<R: Model> NonLinearOpJacobian for Rhs<'_, R> {
     fn jac_mul_inplace(&self, x: &V, t: f64, v: &V, y: &mut V) {
         let e = self.0;
         y.for_each_batch_host([x, v], |y, [x, v], _| e.jv(x, t, v, y));
@@ -201,20 +266,20 @@ impl NonLinearOpJacobian for Rhs<'_> {
     }
 }
 
-impl ConstantOp for Init<'_> {
+impl<R: Model> ConstantOp for Init<'_, R> {
     fn call_inplace(&self, _t: f64, y: &mut V) {
         y.copy_from(&self.0.y0);
     }
 }
 
-impl NonLinearOp for Root<'_> {
+impl<R: Model> NonLinearOp for Root<'_, R> {
     fn call_inplace(&self, x: &V, t: f64, y: &mut V) {
         let e = self.0;
         y.for_each_batch_host([x], |g, [x], _| e.roots(x, t, g));
     }
 }
 
-impl Op for Eqn {
+impl<R: Model> Op for Eqn<R> {
     type T = f64;
     type V = V;
     type M = M;
@@ -233,27 +298,27 @@ impl Op for Eqn {
     }
 }
 
-impl<'a> OdeEquationsRef<'a> for Eqn {
-    type Rhs = Rhs<'a>;
-    type Init = Init<'a>;
-    type Root = Root<'a>;
+impl<'a, R: Model> OdeEquationsRef<'a> for Eqn<R> {
+    type Rhs = Rhs<'a, R>;
+    type Init = Init<'a, R>;
+    type Root = Root<'a, R>;
     type Mass = ParameterisedOp<'a, UnitCallable<M>>;
     type Out = ParameterisedOp<'a, UnitCallable<M>>;
     type Reset = ParameterisedOp<'a, UnitCallable<M>>;
 }
 
-impl OdeEquations for Eqn {
-    fn rhs(&self) -> Rhs<'_> {
+impl<R: Model> OdeEquations for Eqn<R> {
+    fn rhs(&self) -> Rhs<'_, R> {
         Rhs(self)
     }
     fn mass(&self) -> Option<ParameterisedOp<'_, UnitCallable<M>>> {
         None
     }
-    fn root(&self) -> Option<Root<'_>> {
+    fn root(&self) -> Option<Root<'_, R>> {
         // no root function at all when no event is asked for
         (self.events != Events::default()).then_some(Root(self))
     }
-    fn init(&self) -> Init<'_> {
+    fn init(&self) -> Init<'_, R> {
         Init(self)
     }
     fn set_params(&mut self, _p: &V) {}
@@ -463,7 +528,7 @@ impl Tree {
 /// msoaxon's and every pivot clears [`PIVOT_FLOOR`]; faer's sparse LU
 /// otherwise. On EPSGpair faer's general LU was ~37% of the run.
 #[derive(Default)]
-struct TreeLu {
+pub struct TreeLu {
     tree: Option<Tree>,
     faer: Option<FaerSparseLU<f64>>,
     /// Whether the current linearisation is faer's.
@@ -535,18 +600,17 @@ impl TreeLu {
 
 /// diffsol's BDF over one right-hand side, built once and reused for every
 /// segment of every run that uses it.
-pub struct Integrator {
-    problem: OdeSolverProblem<Eqn>,
+pub struct Integrator<R: Model = MultiRhs> {
+    problem: OdeSolverProblem<Eqn<R>>,
 }
 
-impl Integrator {
-    /// Builds the problem: the pattern of `rhs`'s own tree, where the
-    /// analytic Jacobian's values go in it, and the diffsol problem around
-    /// them (tolerances are set per run).
-    pub fn new(rhs: MultiRhs) -> Result<Self, CoreError> {
-        let nstates = 7 * rhs.n();
-        let (parent, child) = rhs.edges();
-        let (rows, cols) = tree_jac_sparsity(rhs.n(), parent, child);
+impl<R: Model> Integrator<R> {
+    /// Builds the problem: `rhs`'s own pattern (for the multi-compartment
+    /// model, its tree), where the analytic Jacobian's values go in it,
+    /// and the diffsol problem around them (tolerances are set per run).
+    pub fn new(rhs: R) -> Result<Self, CoreError> {
+        let nstates = rhs.nstates();
+        let (rows, cols) = rhs.pattern();
         let pairs: Vec<(usize, usize)> = rows.into_iter().zip(cols).collect();
         let nnz = pairs.len();
         let ctx = C::default();
@@ -590,7 +654,7 @@ impl Integrator {
         self.problem.eqn.sparsity.compute_nnz()
     }
 
-    /// The number of states (7n).
+    /// The number of states (7n, or 11 for the two-compartment model).
     pub fn nstates(&self) -> usize {
         self.problem.eqn.nstates
     }
@@ -656,7 +720,7 @@ impl Integrator {
             problem.eqn.rhs().call_inplace(s.y, t0, s.dy);
             s.set_step_size(h0, &problem.atol, problem.rtol, &problem.eqn, 1);
         }
-        let mut solver = problem.bdf_solver::<LS>(state).map_err(err)?;
+        let mut solver = problem.bdf_solver::<R::Ls>(state).map_err(err)?;
         // diffsol's growth bounds, narrowed below while max_step binds. A
         // hop shortens the step the controller chose after the Newton
         // matrix was already refactorised for it, so every hop cost two LU
@@ -669,7 +733,11 @@ impl Integrator {
             Some(c) if h > c => (t + c).min(t1),
             _ => t1,
         };
-        let mut stop = next_stop(h0, t0);
+        // set_step_size takes h0 only as its first guess: from a state at
+        // rest (dy near 0, as two_cpt's exact rest gives) its heuristic can
+        // return a step longer than the cap, so the first stop follows the
+        // step it chose
+        let mut stop = next_stop(solver.state().h, t0);
         solver.set_stop_time(stop).map_err(err)?;
         // the vector the output rows are copied out of (diffsol's vectors
         // lend their slice only to a closure on a mutable operand)
@@ -1231,5 +1299,96 @@ mod tests {
         let ([tree, faer, ..], used_faer) = both_solves(&op);
         assert!(used_faer);
         assert_eq!(tree, faer);
+    }
+
+    // --- the two-compartment model -------------------------------------------
+
+    use crate::core::tests::gating;
+    use crate::two::tests::{params, spec};
+    use crate::two::{TwoStimSpec, NSTATES};
+
+    fn two(loc: f64, s: &TwoStimSpec) -> TwoCptRhs {
+        TwoCptRhs::new(params(loc), gating(), s).unwrap()
+    }
+
+    fn two_y0(v1: f64, v2: f64) -> Vec<f64> {
+        let mut y0 = vec![0.3; NSTATES];
+        (y0[0], y0[1]) = (v1, v2);
+        y0
+    }
+
+    /// x[1] - x[0] at every output row of a two-compartment run.
+    fn two_diff(r: &Run) -> Vec<f64> {
+        r.y.chunks(NSTATES).map(|x| x[1] - x[0]).collect()
+    }
+
+    #[test]
+    fn a_two_compartment_run_ends_on_t1_exactly() {
+        let mut it = Integrator::new(two(1.0, &spec("EPSGpair", 5.0, 5.2, 100.0))).unwrap();
+        assert_eq!((it.nstates(), it.nnz()), (NSTATES, 31));
+        let y0 = two_y0(-68.0, -68.0);
+        let r = it
+            .run(&y0, 0.0, 8.0, TOL, TOL, 0.1, H0, &Events::default())
+            .unwrap();
+        assert!(!r.stopped);
+        assert_eq!(r.y.len(), r.t.len() * NSTATES);
+        assert_eq!((r.t[0], &r.y[..NSTATES]), (0.0, &y0[..]));
+        assert_eq!(*r.t.last().unwrap(), 8.0);
+        assert!(r
+            .t
+            .windows(2)
+            .all(|w| w[0] < w[1] && w[1] - w[0] <= 0.1 + 1e-12));
+        assert!(r.y.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn a_two_compartment_spike_root_stops_on_the_crossing() {
+        // an EPSG into the axon lifts V2 above V1
+        let mut it = Integrator::new(two(2.0, &spec("EPSG", 1.0, 10.0, 100.0))).unwrap();
+        let y0 = two_y0(-68.0, -68.0);
+        let free = it
+            .run(&y0, 0.0, 3.0, TOL, TOL, 0.1, H0, &Events::default())
+            .unwrap();
+        let d = two_diff(&free);
+        let max = d.iter().copied().fold(f64::MIN, f64::max);
+        assert!(max > d[0] + 1.0, "no rise to stop on: {} -> {max}", d[0]);
+        let factor = 0.5 * (d[0] + max);
+        let ev = Events {
+            spike: Some(Spike {
+                axon_col: 1,
+                factor,
+            }),
+            settled: None,
+        };
+        let r = it.run(&y0, 0.0, 3.0, TOL, TOL, 0.1, H0, &ev).unwrap();
+        assert!(r.stopped);
+        assert!((two_diff(&r).last().unwrap() - factor).abs() < 1e-9);
+        let n = r.t.len() - 1;
+        assert_eq!(r.t[..n], free.t[..n]);
+    }
+
+    #[test]
+    fn a_two_compartment_settled_root_tests_both_voltages() {
+        // both V above rest with no input: both fall from the start
+        let rhs = two(1.0, &TwoStimSpec::default());
+        let mut it = Integrator::new(rhs.clone()).unwrap();
+        let settled = Settled {
+            t_off: 1.0,
+            axon_col: 1,
+            threshold: 1e9,
+        };
+        let ev = Events {
+            spike: None,
+            settled: Some(settled),
+        };
+        let r = it
+            .run(&two_y0(-55.0, -55.0), 0.0, 4.0, TOL, TOL, 0.5, H0, &ev)
+            .unwrap();
+        assert!(r.stopped);
+        let t_stop = *r.t.last().unwrap();
+        assert!((1.0..4.0).contains(&t_stop), "stopped at {t_stop}");
+        let mut dx = [0.0; NSTATES];
+        rhs.eval(t_stop, &r.y[r.y.len() - NSTATES..], &mut dx);
+        assert!(dx[..2].iter().all(|v| *v < 0.0));
     }
 }

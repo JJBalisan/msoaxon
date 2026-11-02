@@ -105,7 +105,7 @@ pub struct Epsg {
 
 impl Epsg {
     #[inline]
-    fn unitary(&self, t: f64) -> f64 {
+    pub(crate) fn unitary(&self, t: f64) -> f64 {
         let pos = if t > 0.0 { 1.0 } else { 0.0 };
         // Far before onset the exponentials overflow and 0 * inf is NaN;
         // like the Python, they see t no lower than -1 (the product is
@@ -1147,7 +1147,7 @@ fn tree_neighbours(n: usize, parent: &[usize], child: &[usize]) -> Vec<Vec<usize
 /// cancel and no inf * 0, so it is accurate (and -0.0, not NaN) at both
 /// saturated ends.
 #[inline]
-fn logistic(u: f64) -> (f64, f64) {
+pub(crate) fn logistic(u: f64) -> (f64, f64) {
     let e = u.exp();
     (1.0 / (1.0 + e), -1.0 / (2.0 + e + 1.0 / e))
 }
@@ -1156,7 +1156,7 @@ fn logistic(u: f64) -> (f64, f64) {
 /// -k d'), or 0 where d has overflowed: `eval`'s tau is then flat at c,
 /// while the quotient would be inf / inf = NaN.
 #[inline]
-fn finite_over(num: f64, d: f64) -> f64 {
+pub(crate) fn finite_over(num: f64, d: f64) -> f64 {
     if d.is_finite() {
         num / (d * d)
     } else {
@@ -1167,7 +1167,7 @@ fn finite_over(num: f64, d: f64) -> f64 {
 /// d/dV and d/dx of a gate's (x_inf(V) - x) / tau(V), from x_inf, tau and
 /// their derivatives with respect to V.
 #[inline]
-fn relax(inf: f64, d_inf: f64, x: f64, tau: f64, d_tau: f64) -> (f64, f64) {
+pub(crate) fn relax(inf: f64, d_inf: f64, x: f64, tau: f64, d_tau: f64) -> (f64, f64) {
     ((d_inf - (inf - x) / tau * d_tau) / tau, -1.0 / tau)
 }
 
@@ -1265,7 +1265,7 @@ pub(crate) mod tests {
 
     /// The values `msoaxon._fast._gating()` passes (multi.V_NA, constants.py's
     /// literals and Q10 factors), for the fixed model below.
-    fn gating() -> Gating {
+    pub(crate) fn gating() -> Gating {
         let q10 = |a: f64, b: f64| 3f64.powf((a - b) / 10.0);
         let values = [
             ("v_na", 69.0),

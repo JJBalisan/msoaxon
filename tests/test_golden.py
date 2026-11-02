@@ -268,9 +268,7 @@ CASES = cases()
 def sample(name, mode="exact"):
     """[t_end reached, soma samples, axon samples] for one case."""
     model, kw, axon = CASES[name]
-    if model == "multi":
-        kw = {**kw, "mode": mode}
-    t, x = _run(model, **kw)
+    t, x = _run(model, **kw, mode=mode)
     times = [s for s in TIMES if s <= t[-1]]
     return {
         "t_last": float(t[-1]),

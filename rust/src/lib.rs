@@ -1,15 +1,17 @@
-//! The Python binding of the Rust right-hand side of msoaxon's
-//! 45-compartment model.
+//! The Python binding of the Rust right-hand sides of msoaxon's
+//! 45-compartment and two-compartment models.
 //!
-//! The model itself is in [`core`] (plain Rust, no pyo3, usable from a Rust
-//! integrator). This file only converts the numpy arguments, calls the core
-//! constructor and wraps the result as the `MultiRhs` class that scipy's BDF
-//! solver calls as `f(t, x)`; msoaxon builds one per `mso_axon` call.
-//! `MultiRhs.integrator()` wraps [`integrate`]'s BDF integrator for
+//! The models themselves are in [`core`] and [`two`] (plain Rust, no pyo3,
+//! usable from a Rust integrator). This file only converts the numpy
+//! arguments, calls the constructors and wraps the results as the
+//! `MultiRhs` and `TwoCptRhs` classes that scipy's BDF solver calls as
+//! `f(t, x)`; msoaxon builds one per `mso_axon` or `two_cpt` call. Their
+//! `integrator()` wraps [`integrate`]'s BDF integrator for
 //! `mode="native"`, where Rust runs the whole integration.
 
 pub mod core;
 pub mod integrate;
+pub mod two;
 
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
@@ -25,6 +27,37 @@ impl From<core::CoreError> for PyErr {
 
 fn to_vec(a: &PyReadonlyArray1<'_, f64>) -> Vec<f64> {
     a.as_array().to_vec()
+}
+
+/// The "Events" table from its `ev_*` arrays: all seven or none.
+fn event_table(
+    ev_t: Option<PyReadonlyArray1<'_, f64>>,
+    ev_k: Option<PyReadonlyArray1<'_, i64>>,
+    ev_g: Option<PyReadonlyArray1<'_, f64>>,
+    ev_rise: Option<PyReadonlyArray1<'_, f64>>,
+    ev_decay: Option<PyReadonlyArray1<'_, f64>>,
+    ev_inv_peak: Option<PyReadonlyArray1<'_, f64>>,
+    ev_e_rev: Option<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<Option<core::EventTable>> {
+    // a table with a missing column is a bug
+    match (ev_t, ev_k, ev_g, ev_rise, ev_decay, ev_inv_peak, ev_e_rev) {
+        (None, None, None, None, None, None, None) => Ok(None),
+        (Some(t), Some(k), Some(g), Some(rise), Some(decay), Some(inv_peak), Some(e_rev)) => {
+            Ok(Some(core::EventTable {
+                t: to_vec(&t),
+                k: k.as_array().to_vec(),
+                g: to_vec(&g),
+                rise: to_vec(&rise),
+                decay: to_vec(&decay),
+                inv_peak: to_vec(&inv_peak),
+                e_rev: to_vec(&e_rev),
+            }))
+        }
+        _ => Err(PyValueError::new_err(
+            "the ev_* arrays (t, k, g, rise, decay, inv_peak, e_rev) \
+             go together: pass all seven or none",
+        )),
+    }
 }
 
 /// The right-hand side of one `mso_axon` run: f(t, x) -> dx/dt.
@@ -89,27 +122,7 @@ impl MultiRhs {
         ev_inv_peak: Option<PyReadonlyArray1<'_, f64>>,
         ev_e_rev: Option<PyReadonlyArray1<'_, f64>>,
     ) -> PyResult<Self> {
-        // all seven arrays or none: a table with a missing column is a bug
-        let events = match (ev_t, ev_k, ev_g, ev_rise, ev_decay, ev_inv_peak, ev_e_rev) {
-            (None, None, None, None, None, None, None) => None,
-            (Some(t), Some(k), Some(g), Some(rise), Some(decay), Some(inv_peak), Some(e_rev)) => {
-                Some(core::EventTable {
-                    t: to_vec(&t),
-                    k: k.as_array().to_vec(),
-                    g: to_vec(&g),
-                    rise: to_vec(&rise),
-                    decay: to_vec(&decay),
-                    inv_peak: to_vec(&inv_peak),
-                    e_rev: to_vec(&e_rev),
-                })
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "the ev_* arrays (t, k, g, rise, decay, inv_peak, e_rev) \
-                     go together: pass all seven or none",
-                ))
-            }
-        };
+        let events = event_table(ev_t, ev_k, ev_g, ev_rise, ev_decay, ev_inv_peak, ev_e_rev)?;
         let params = core::Params {
             g_na: to_vec(&g_na),
             g_kht: to_vec(&g_kht),
@@ -184,18 +197,163 @@ impl MultiRhs {
     /// segment.
     fn integrator(&self) -> PyResult<Integrator> {
         Ok(Integrator {
-            inner: Mutex::new(integrate::Integrator::new(self.inner.clone())?),
+            inner: Mutex::new(AnyIntegrator::Multi(integrate::Integrator::new(
+                self.inner.clone(),
+            )?)),
         })
     }
 }
 
-/// diffsol's BDF over one `MultiRhs` (`mode="native"`).
+/// The right-hand side of one `two_cpt` run: f(t, x) -> dx/dt.
+#[pyclass(frozen, module = "msoaxon_fast")]
+struct TwoCptRhs {
+    inner: two::TwoCptRhs,
+}
+
+#[pymethods]
+impl TwoCptRhs {
+    /// Builds the right-hand side of one run.
+    ///
+    /// `params` is `dataclasses.asdict` of `two.get_params`'s
+    /// `TwoCptParams`, `gating` as for `MultiRhs`. The stimulus keywords
+    /// are the fields of `_common.stimulus` that `two.applied_current`
+    /// reads, with `epsg` = (1 / peak, decay, rise) and `ramp_rise`
+    /// `_solve.RAMP_RISE`; "Events" takes its table as `MultiRhs` does
+    /// (`ev_k` 0 is the soma, any other the axon compartment).
+    #[new]
+    #[pyo3(signature = (
+        *, params, gating, stim_type, start=0.0, stop=0.0, amp=0.0,
+        t_end=0.0, slope=0.0, t_top=0.0, two_pi_f=0.0, ramp_rise=0.0,
+        epsg=(1.0, 1.0, 1.0), t_syn=None, g_syn=None, vsyn=0.0, diff=None,
+        ev_t=None, ev_k=None, ev_g=None, ev_rise=None, ev_decay=None,
+        ev_inv_peak=None, ev_e_rev=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        params: HashMap<String, f64>,
+        gating: HashMap<String, f64>,
+        stim_type: &str,
+        start: f64,
+        stop: f64,
+        amp: f64,
+        t_end: f64,
+        slope: f64,
+        t_top: f64,
+        two_pi_f: f64,
+        ramp_rise: f64,
+        epsg: (f64, f64, f64),
+        t_syn: Option<PyReadonlyArray1<'_, f64>>,
+        g_syn: Option<PyReadonlyArray1<'_, f64>>,
+        vsyn: f64,
+        diff: Option<f64>,
+        ev_t: Option<PyReadonlyArray1<'_, f64>>,
+        ev_k: Option<PyReadonlyArray1<'_, i64>>,
+        ev_g: Option<PyReadonlyArray1<'_, f64>>,
+        ev_rise: Option<PyReadonlyArray1<'_, f64>>,
+        ev_decay: Option<PyReadonlyArray1<'_, f64>>,
+        ev_inv_peak: Option<PyReadonlyArray1<'_, f64>>,
+        ev_e_rev: Option<PyReadonlyArray1<'_, f64>>,
+    ) -> PyResult<Self> {
+        let events = event_table(ev_t, ev_k, ev_g, ev_rise, ev_decay, ev_inv_peak, ev_e_rev)?;
+        let spec = two::TwoStimSpec {
+            stim_type: stim_type.to_string(),
+            start,
+            stop,
+            amp,
+            t_end,
+            slope,
+            t_top,
+            two_pi_f,
+            ramp_rise,
+            epsg,
+            t_syn: t_syn.as_ref().map(to_vec),
+            g_syn: g_syn.as_ref().map(to_vec),
+            vsyn,
+            diff,
+            events,
+        };
+        Ok(TwoCptRhs {
+            inner: two::TwoCptRhs::new(
+                two::TwoParams::from_map(&params)?,
+                core::Gating::from_map(&gating)?,
+                &spec,
+            )?,
+        })
+    }
+
+    /// Returns dx/dt at time t for the state x (length 11) as a new array.
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        t: f64,
+        x: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let len = x.len()?;
+        if len != two::NSTATES {
+            return Err(PyValueError::new_err(format!(
+                "x has {len} entries, expected {}",
+                two::NSTATES
+            )));
+        }
+        let mut out = vec![0.0f64; len];
+        match x.as_slice() {
+            Ok(xs) => self.inner.eval(t, xs, &mut out),
+            Err(_) => self.inner.eval(t, &x.as_array().to_vec(), &mut out),
+        }
+        Ok(PyArray1::from_vec(py, out))
+    }
+
+    /// Returns a BDF integrator over this right-hand side (`Integrator`).
+    fn integrator(&self) -> PyResult<Integrator> {
+        Ok(Integrator {
+            inner: Mutex::new(AnyIntegrator::Two(integrate::Integrator::new(
+                self.inner.clone(),
+            )?)),
+        })
+    }
+}
+
+/// One model's integrator, behind the one Python class.
+enum AnyIntegrator {
+    Multi(integrate::Integrator<core::MultiRhs>),
+    Two(integrate::Integrator<two::TwoCptRhs>),
+}
+
+impl AnyIntegrator {
+    /// `integrate::Integrator::run` from the initial step `H0`.
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &mut self,
+        y0: &[f64],
+        t0: f64,
+        t1: f64,
+        rtol: f64,
+        atol: f64,
+        max_step: f64,
+        events: &integrate::Events,
+    ) -> Result<integrate::Run, core::CoreError> {
+        let h0 = integrate::H0;
+        match self {
+            AnyIntegrator::Multi(it) => it.run(y0, t0, t1, rtol, atol, max_step, h0, events),
+            AnyIntegrator::Two(it) => it.run(y0, t0, t1, rtol, atol, max_step, h0, events),
+        }
+    }
+
+    fn nnz(&self) -> usize {
+        match self {
+            AnyIntegrator::Multi(it) => it.nnz(),
+            AnyIntegrator::Two(it) => it.nnz(),
+        }
+    }
+}
+
+/// diffsol's BDF over one `MultiRhs` or `TwoCptRhs` (`mode="native"`).
 ///
 /// diffsol keeps scratch space in `RefCell`s, so the integrator is `Send`
 /// but not `Sync`; the `Mutex` makes the class shareable as pyo3 requires.
 #[pyclass(frozen, module = "msoaxon_fast")]
 struct Integrator {
-    inner: Mutex<integrate::Integrator>,
+    inner: Mutex<AnyIntegrator>,
 }
 
 /// Returns a (t, y, stopped) Python tuple's arrays: y reshaped to (n_t, n).
@@ -209,8 +367,8 @@ impl Integrator {
     /// (t_off, axon_col, factor * SETTLED_FRACTION) of
     /// `_solve.settled_event`; None leaves that event out. Returns
     /// (t, y, stopped): t from t0 (y0 included) through every accepted step
-    /// to t1 or the event, y shaped (len(t), 7n), stopped whether an event
-    /// fired.
+    /// to t1 or the event, y shaped (len(t), n_states), stopped whether an
+    /// event fired.
     #[pyo3(signature = (y0, t0, t1, rtol, atol, max_step, spike=None, settled=None))]
     #[allow(clippy::too_many_arguments)]
     fn run<'py>(
@@ -250,7 +408,7 @@ impl Integrator {
         }
         let run = py.allow_threads(|| {
             let mut it = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            it.run(&y0, t0, t1, rtol, atol, max_step, integrate::H0, &events)
+            it.run(&y0, t0, t1, rtol, atol, max_step, &events)
         })?;
         let nt = run.t.len();
         let y = PyArray1::from_vec(py, run.y).reshape([nt, n])?;
@@ -281,10 +439,11 @@ fn interp(xs: PyReadonlyArray1<'_, f64>, ys: PyReadonlyArray1<'_, f64>, x: f64) 
     Ok(table.interp(x))
 }
 
-/// The Rust right-hand side of msoaxon's 45-compartment model.
+/// The Rust right-hand sides of msoaxon's 45- and two-compartment models.
 #[pymodule]
 fn msoaxon_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MultiRhs>()?;
+    m.add_class::<TwoCptRhs>()?;
     m.add_class::<Integrator>()?;
     m.add_function(wrap_pyfunction!(interp, m)?)?;
     Ok(())

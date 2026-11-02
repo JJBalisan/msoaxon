@@ -9,7 +9,7 @@ import dataclasses
 
 import numpy as np
 
-from msoaxon import _common, _solve, constants as C, synaptic
+from msoaxon import _common, _fast, _solve, constants as C, synaptic
 
 # Passive targets of Goldwyn, Remme & Rinzel 2019 (PLoS Comput Biol
 # 15:e1006476), the paper this model's coupling-constant framework comes from.
@@ -708,6 +708,7 @@ def two_cpt(
     soma_na_vhalf: float = NA_VHALF,
     axon_na_vhalf: float = NA_VHALF,
     klt_to_leak: str | None = None,
+    mode: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Runs the two-compartment model.
 
@@ -799,6 +800,9 @@ def two_cpt(
         axon_na_vhalf: The same for the axon compartment.
         klt_to_leak: None (default) keeps KLT; "chord" or "slope"
             replaces it by a leak, as above.
+        mode: "exact", "fast", "native" or None, as in mso_axon: _rhs
+            (the reference), its Rust port under scipy's BDF, or the port
+            under the Rust BDF integrator. See _fast.
 
     Returns:
         (t, x) with x shaped (n_times, 11); see the module docstring for
@@ -807,7 +811,8 @@ def two_cpt(
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
             ramp with stop <= start, a free-coupling argument outside
-            its range, or klt_to_leak not None, "chord" or "slope".
+            its range, klt_to_leak not None, "chord" or "slope", or an
+            unknown mode.
     """
     _common.check_args(
         stim_type,
@@ -846,6 +851,16 @@ def two_cpt(
     if stim_type == "Events":
         start, stop = s.start, s.stop  # the first and last onset
     x0 = initial_state(P)
+    mode = _fast.resolve(mode)
+    if mode in ("fast", "native"):
+        build = _fast.build_two if mode == "fast" else _fast.build_two_native
+        rhs = build(stim_type, s, P)
+        quiet_rhs = build("none", s, P)
+        dv = lambda t, x: rhs(t, x)[:2]  # noqa: E731
+    else:
+        rhs = lambda t, x: _rhs(t, x, P, stim_type, s)  # noqa: E731
+        quiet_rhs = lambda t, x: _rhs(t, x, P, "none", s)  # noqa: E731
+        dv = lambda t, x: _dv(t, x, P, stim_type, s)  # noqa: E731
     cuts = _solve.breakpoints(
         stim_type,
         start,
@@ -873,11 +888,10 @@ def two_cpt(
                 r1,
                 tau_est,
                 dataclasses.astuple(P),  # every knob, as resolved
+                mode,
             ),
-            lambda t, x: _rhs(t, x, P, "none", s),
+            quiet_rhs,
         )
-    rhs = lambda t, x: _rhs(t, x, P, stim_type, s)  # noqa: E731
-    dv = lambda t, x: _dv(t, x, P, stim_type, s)  # noqa: E731
     return _solve.integrate(
         rhs,
         x0,

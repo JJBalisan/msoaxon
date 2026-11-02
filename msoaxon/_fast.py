@@ -1,20 +1,21 @@
-"""The optional Rust right-hand side of the 45-compartment model.
+"""The optional Rust right-hand sides of both models.
 
-`msoaxon_fast` (rust/, the `fast` extra) ports multi._rhs to Rust,
-expression for expression in numpy's floating-point order. multi._rhs stays
-the reference: mso_axon(mode="exact") runs it, mode="fast" runs the port
-under scipy's BDF, and mode="native" runs the port under a Rust BDF
+`msoaxon_fast` (rust/, the `fast` extra) ports multi._rhs and two._rhs to
+Rust, expression for expression in numpy's floating-point order. The numpy
+functions stay the reference: mode="exact" runs them, mode="fast" runs the
+port under scipy's BDF, and mode="native" runs the port under a Rust BDF
 integrator (diffsol), so no Python is left in the time loop (Native).
 
-Mode, per mso_axon call: an explicit mode= wins, then the MSOAXON_MODE
-environment variable, then the default, which is "native" when the
-extension imports, else "exact" (silently when the extra is not installed;
-with a warning when it is installed but fails to load). Every configuration
-is ported. Asking for "fast" or "native" (by argument or environment) when
-it can't run warns and runs "exact".
+Mode, per mso_axon or two_cpt call: an explicit mode= wins, then the
+MSOAXON_MODE environment variable, then the default, which is "native" when
+the extension imports, else "exact" (silently when the extra is not
+installed; with a warning when it is installed but fails to load). Every
+configuration of either model is ported. Asking for "fast" or "native" (by
+argument or environment) when it can't run warns and runs "exact".
 
-The first fast run in a process checks the port against multi._rhs on a few
-fixed states and reports the result in a DriftWarning: bit-identical on the
+The first fast run in a process (of either model) checks the multi port
+against multi._rhs on a few fixed states and reports the result in a
+DriftWarning: bit-identical on the
 machine the port was checked on (darwin-arm64), it may differ in the last
 bits on other hardware, where numpy and Rust can use different exp/pow.
 The first native run issues its own DriftWarning: its steps are diffsol's,
@@ -22,6 +23,7 @@ not scipy's, so it agrees with the reference within the solver tolerance,
 not bit for bit.
 """
 
+import dataclasses
 import importlib
 import os
 import warnings
@@ -30,10 +32,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from msoaxon import _common, constants, synaptic
+from msoaxon import _common, _solve, constants, synaptic
 
-if TYPE_CHECKING:  # multi imports this module
-    from msoaxon import multi
+if TYPE_CHECKING:  # multi and two import this module
+    from msoaxon import multi, two
 
 
 def _import_ext(
@@ -334,7 +336,7 @@ class Native:
     """
 
     def __init__(self, rhs: Rhs) -> None:
-        """Wraps `rhs`, an msoaxon_fast.MultiRhs."""
+        """Wraps `rhs`, an msoaxon_fast.MultiRhs or TwoCptRhs."""
         self._rhs = rhs
         self._integrator = None
 
@@ -464,6 +466,83 @@ def _build(
         parent=np.asarray(morph.parent, dtype=np.int64),
         child=np.asarray(morph.child, dtype=np.int64),
         active=tuple(bool(a) for a in active),
+        gating=_gating(),
+        **stim,
+    )
+
+
+def build_two(
+    stim_type: str, s: _common.Stimulus, params: 'two.TwoCptParams'
+) -> Rhs:
+    """Builds the Rust right-hand side of one two_cpt run.
+
+    As build(), for two._rhs; the first call in a process (of either
+    model) issues the fast DriftWarning.
+
+    Args:
+        stim_type: The stimulus name, or "none".
+        s: The stimulus settings (_common.stimulus).
+        params: The parameters (two.get_params).
+
+    Returns:
+        f(t, x) -> dx/dt, bit for bit two._rhs on darwin-arm64.
+    """
+    if not _STATE["warned"]:
+        _STATE["warned"] = True
+        _warn_drift()
+    return _build_two(stim_type, s, params)
+
+
+def build_two_native(
+    stim_type: str, s: _common.Stimulus, params: 'two.TwoCptParams'
+) -> 'Native':
+    """As build_two(), for mode="native" (see build_native)."""
+    if not _STATE["warned_native"]:
+        _STATE["warned_native"] = True
+        _warn_native()
+    return Native(_build_two(stim_type, s, params))
+
+
+def _build_two(
+    stim_type: str, s: _common.Stimulus, params: 'two.TwoCptParams'
+) -> Rhs:
+    """build_two() without the first-use DriftWarning.
+
+    Every parameter goes over as resolved by two.get_params (so the
+    'Active-sodium' spelling and the frozen KLT inactivation arrive as
+    values), with the stimulus fields two.applied_current reads.
+    """
+    rise, decay = s.epsg_tau
+    stim = {
+        "stim_type": stim_type,
+        "start": float(s.start),
+        "stop": float(s.stop),
+        "amp": float(s.I),
+        "t_end": float(s.t_end),
+        "ramp_rise": float(_solve.RAMP_RISE),
+        "epsg": (float(s.inv_peak), float(decay), float(rise)),
+    }
+    for name in ("slope", "t_top", "two_pi_f"):
+        if getattr(s, name) is not None:
+            stim[name] = float(getattr(s, name))
+    if stim_type in ("Synaptic", "SynapticPair"):
+        stim.update(
+            t_syn=_f64(s.t_syn),
+            g_syn=_f64(s.g_syn),
+            vsyn=float(s.VsynE),
+            diff=float(s.diff),
+        )
+    if stim_type == "Events":
+        stim.update(
+            {
+                f"ev_{name}": (
+                    np.asarray(a, dtype=np.int64) if name == "k" else _f64(a)
+                )
+                for name, a in s.events.items()
+            }
+        )
+    return _ext.TwoCptRhs(
+        params={k: float(v) for k, v in dataclasses.asdict(params).items()},
         gating=_gating(),
         **stim,
     )
