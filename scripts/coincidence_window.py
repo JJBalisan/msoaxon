@@ -194,34 +194,36 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     # figure: normalised threshold curves, and probability curves
     # imported here rather than at the top: pool workers re-import this script,
     # and only the main process draws
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(14, 6.2))
+    plotting.agg()
+    fig = plotting.figure("double", height=4.4)
+    a1, a2 = fig.subplots(1, 2)
     colours = ["#1f5fa8", "#d2691e", "#2e8b57"]
-    for c, cname in zip(colours, CONFIGS, strict=True):
-        for kname, ls in zip(KINETICS, ("-", "--"), strict=True):
-            th = curves[(cname, kname)]
-            a1.plot(
-                delays * 1e3,
-                th / th[0],
-                color=c,
-                ls=ls,
-                lw=2,
-                label=f"{cname.split(' (')[0]}, {kname.split(' (')[0]}",
+    plotting.threshold_ratio_panel(
+        a1,
+        delays,
+        [
+            (
+                curves[(cname, kname)],
+                {
+                    "color": c,
+                    "ls": ls,
+                    "label": f"{cname.split(' (')[0]}, {kname.split(' (')[0]}",
+                },
             )
-    for m in MARGINS:
-        a1.axhline(1 + m, color="0.5", lw=0.8, ls=":")
+            for c, cname in zip(colours, CONFIGS, strict=True)
+            for kname, ls in zip(KINETICS, ("-", "--"), strict=True)
+        ],
+        MARGINS,
+    )
     a1.set(
         xlim=(0, 600),
-        ylim=(0.98, 2.05),
-        xlabel="Delay between EPSGs (us)",
-        ylabel="Threshold / coincident threshold",
-        title="Threshold rises with delay (dotted: 0.5% and 3% input margins)",
+        title="Threshold rises with delay\n(dotted: 0.5% and 3% input margins)",
     )
-    a1.legend(fontsize=7.5, frameon=False, loc="lower right")
+    # below the panel: six entries do not fit beside the curves at 7 in
+    a1.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2))
+    plotting.panel_label(a1, "A")
 
     sym = np.concatenate([-mc_delays[:0:-1], mc_delays]) * 1e3
     a2.plot(
@@ -229,7 +231,6 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
         np.concatenate([prob[:0:-1], prob]),
         "o-",
         color=colours[1],
-        lw=1.5,
         label=f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us)",
     )
     for c, cname, y in zip(
@@ -254,22 +255,16 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     a2.set(
         xlim=(-320, 320),
         ylim=(-0.03, 1.05),
-        xlabel="Delay between EPSGs (us)",
+        xlabel=plotting.units("Delay between EPSGs", "us"),
         ylabel="Spike probability",
         title=(
-            "Coincidence window at half maximum "
+            "Coincidence window at half maximum\n"
             "(model EPSG; bars offset around 0.5)"
         ),
     )
-    a2.legend(
-        fontsize=7.5,
-        frameon=False,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.13),
-        ncol=2,
-    )
-    fig.tight_layout()
-    fig.savefig(out / "coincidence_window.png", dpi=140)
+    a2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1)
+    plotting.panel_label(a2, "B")
+    plotting.save(fig, out / "coincidence_window")
 
     summary = {
         "curve_delays_ms": delays.tolist(),
@@ -297,7 +292,7 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
         },
     }
     (out / "coincidence_window.json").write_text(json.dumps(summary, indent=1))
-    print(f"saved {out}/coincidence_window.png and .json")
+    print(f"saved {out}/coincidence_window.png, .pdf and .json")
 
 
 if __name__ == "__main__":

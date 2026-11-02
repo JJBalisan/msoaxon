@@ -50,7 +50,8 @@ def run_script(name, *args):
 def test_dendrites_script(tmp_path, flags, rin_range):
     run_script("dendrites.py", "--quick", "--out-dir", tmp_path, *flags)
     res = json.loads((tmp_path / "dendrites.json").read_text())
-    assert (tmp_path / "dendrites.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"dendrites.{ext}").stat().st_size > 0
 
     assert (
         rin_range[0]
@@ -88,7 +89,8 @@ def test_coincidence_window_script(tmp_path):
         "coincidence_window.py", "--quick", "--trials", 8, "--out-dir", tmp_path
     )
     res = json.loads((tmp_path / "coincidence_window.json").read_text())
-    assert (tmp_path / "coincidence_window.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"coincidence_window.{ext}").stat().st_size > 0
 
     rows = {(r["model"], r["epsg"]): r for r in res["half_widths_us"]}
     assert len(rows) == 6  # 3 model configurations x 2 EPSG kinetics
@@ -108,7 +110,8 @@ def test_coincidence_window_script(tmp_path):
 def test_somatic_spike_script(tmp_path):
     run_script("somatic_spike.py", "--quick", "--out-dir", tmp_path)
     res = json.loads((tmp_path / "somatic_spike.json").read_text())
-    assert (tmp_path / "somatic_spike.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"somatic_spike.{ext}").stat().st_size > 0
 
     assert len(res) == 3
     control = res["45-compartment (msoAxon.m)"]
@@ -125,7 +128,8 @@ def test_somatic_spike_script(tmp_path):
 def test_resonance_script(tmp_path):
     run_script("resonance.py", "--quick", "--out-dir", tmp_path)
     res = json.loads((tmp_path / "resonance.json").read_text())
-    assert (tmp_path / "resonance.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"resonance.{ext}").stat().st_size > 0
 
     assert res["quick"]
     assert res["targets_hz"] == {
@@ -210,7 +214,8 @@ def test_making_threshold_graphs_script(tmp_path):
     two = re.search(r"two  =\[([0-9.]+)\]", out)
     assert float(multi[1]) == pytest.approx(11054.08, rel=1e-3)
     assert float(two[1]) == pytest.approx(11541.14, rel=1e-3)
-    assert (tmp_path / "sine_thresholds_cpt3.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"sine_thresholds_cpt3.{ext}").stat().st_size > 0
 
 
 def test_phase0_harness_script(tmp_path):
@@ -270,7 +275,8 @@ def test_coupling_plane_script(tmp_path):
     out = run_script("coupling_plane.py", "--quick", "--out-dir", tmp_path)
     res = json.loads((tmp_path / "coupling_plane.json").read_text())
     assert "closest to the 45-compartment model" in out
-    assert (tmp_path / "coupling_plane.png").stat().st_size > 0
+    for ext in ("png", "pdf"):
+        assert (tmp_path / f"coupling_plane.{ext}").stat().st_size > 0
     by = {(p["couple12"], p["couple21"]): p for p in res["points"]}
     # the quick grid (3 x 3, forward >= backward) and the four landmarks
     assert len(by) == 10
