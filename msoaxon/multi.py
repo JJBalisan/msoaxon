@@ -137,8 +137,8 @@ class Morphology:
         n: Number of compartments (45 for LUMPED).
         sa: Membrane area per compartment [um^2].
         cap: Capacitance per compartment [ms nS/um^2].
-        g_na: Na density per compartment [nS/um^2]; membrane() may
-            override it without touching this.
+        g_na: Na density per compartment [nS/um^2]; membrane() copies
+            it into Membrane.g_na unchanged.
         g_kht: KHT density per compartment [nS/um^2].
         g_klt: KLT density per compartment [nS/um^2]; membrane() may
             override it.
@@ -317,9 +317,16 @@ def with_dendrites(
         `medial` holding each dendrite's 1-indexed compartment numbers.
 
     Raises:
-        ValueError: If the dendrites need more membrane than the lumped
-            soma has.
+        ValueError: If length, diameter or n_seg is not > 0, or the
+            dendrites need more membrane than the lumped soma has.
     """
+    for name, value in (
+        ("length", length),
+        ("diameter", diameter),
+        ("n_seg", n_seg),
+    ):
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0, got {value!r}")
     n_d = 2 * n_seg
     n = N + n_d
     seg = length / n_seg
@@ -1261,7 +1268,8 @@ def mso_axon(
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
             ramp with stop <= start, a missing input_node2, a mem built
-            for another morphology, or an unknown mode.
+            for another morphology, an unknown mode, or a t_end or
+            max_step that is not > 0.
     """
     morph = morph or (mem.morph if mem is not None else LUMPED)
     _common.check_args(
@@ -1275,6 +1283,7 @@ def mso_axon(
         stim_types=MSO_STIM_TYPES,
         n_max=morph.n,
     )
+    _common.check_times(t_end, max_step)
     if stim_type == "EPSGbilateral" and not (
         input_node2 and 1 <= input_node2 <= morph.n
     ):
@@ -1343,7 +1352,7 @@ def mso_axon(
         cuts,
         rtol=RTOL,
         atol=ATOL,
-        max_step=max_step or MAX_STEP_FRACTION * t_end,
+        max_step=(MAX_STEP_FRACTION * t_end if max_step is None else max_step),
         jac_sparsity=morph.jac,
         quiet=quiet,
         stop_event=_common._stops(
