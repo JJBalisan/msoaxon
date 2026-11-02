@@ -41,6 +41,8 @@ MULTI_THRESHOLD_NS = 48.01
 MAX_RATIO = 10.0  # Goldwyn 2019 Methods: couple12 / couple21 does not exceed it
 AXIS_LO, AXIS_HI = 0.1, 0.9
 DEFAULT_STEP, QUICK_STEP = 0.1, 0.4
+# the plot writes each cell's value when the grid is at least this coarse
+COARSE_STEP = 0.2
 DEFAULT_CEILING, QUICK_CEILING = 2000.0, 300.0  # [nS]
 NODE = 3  # the lookup node whose constants are the default cell
 # Goldwyn 2019 Fig 3's stars; the lookup's point is added in landmarks()
@@ -376,7 +378,9 @@ def plot(
 ) -> None:
     """Draws the window and the threshold over the plane.
 
-    Grid points that spike are coloured squares; grey squares are cells with
+    Grid points that spike are coloured squares, on a colour scale at least
+    10% of the median wide (plotting.colour_limits) and, on a coarse grid,
+    labelled with their value; grey squares are cells with
     a graded response only (a circle) or no spike or window (a cross); the
     lookup's point, Goldwyn's stars and the located point are
     marked, and the grey dots are the 44 axon nodes' own constants.
@@ -407,18 +411,36 @@ def plot(
         ]
         graded = [p for p in points if p["status"] == "graded"]
         lost = [p for p in points if p not in found and p not in graded]
-        # the squares' areas [pt^2] from the 13 in figure this was drawn
-        # at, scaled to the 7 in one so each still fills the same share of
-        # its cell
-        size = (900 * step if step < 0.2 else 700) * (7.0 / 13) ** 2
+        # the squares' areas [pt^2]: a fine grid keeps its 13 in proportion
+        # scaled to 7 in; a coarse one gets squares big enough to label
+        size = 900 * step * (7.0 / 13) ** 2 if step < COARSE_STEP else 500
+        values = [p[key] for p in found]
+        # never autoscaled: a 2 us spread must not fill the colour map
+        vmin, vmax = plotting.colour_limits(values) if found else (0, 1)
         sc = ax.scatter(
             [p["couple12"] for p in found],
             [p["couple21"] for p in found],
-            c=[p[key] for p in found],
+            c=values,
             s=size,
             marker="s",
             cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
         )
+        if step >= COARSE_STEP:  # few cells: write each one's value
+            for p in found:
+                dark = (p[key] - vmin) / (vmax - vmin) < 0.5
+                ax.annotate(
+                    f"{p[key]:.0f}" if key == "window_us" else f"{p[key]:.1f}",
+                    (p["couple12"], p["couple21"]),
+                    xytext=(0, -7),
+                    va="center",
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=6,
+                    color="w" if dark else "k",
+                    zorder=7,
+                )
         for group, mark, label in (
             (graded, "o", "graded response, no spike"),
             (lost, "x", "no spike, or no window"),

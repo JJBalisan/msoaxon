@@ -47,6 +47,22 @@ def epsgpair_grid(jpg_grid: bool) -> tuple[int, dict[str, float | bool]]:
     return SWEEPS["EPSGpair"][0], {"epsg_pair_dt": 1 / 25, "rounded": True}
 
 
+def resolution(stim: str, jpg_grid: bool) -> float | None:
+    """Returns the rounding binary_search applies to a sweep's thresholds.
+
+    Args:
+        stim: The stimulus swept.
+        jpg_grid: Whether EPSGpair runs on the jpg grid (unrounded).
+
+    Returns:
+        1 for EPSGpair, 10 otherwise (BinarySearch.m's rounding), or None
+        when the sweep is not rounded.
+    """
+    if stim == "EPSGpair":
+        return None if jpg_grid else 1
+    return 10
+
+
 def main() -> None:
     """Parses the command line and runs the threshold sweeps."""
     ap = argparse.ArgumentParser(
@@ -135,7 +151,7 @@ def run(
             jobs = {stim: threads.submit(sweep, stim) for stim in stims}
             sweeps = {stim: job.result() for stim, job in jobs.items()}
     for stim in stims:
-        _, _, _, title, xlabel = SWEEPS[stim]
+        _, _, max_I, title, xlabel = SWEEPS[stim]
         x_values, multi, two = sweeps[stim]
         print(f"{stim}: multi={multi}\n{' ' * len(stim)}  two  ={two}")
         fig = plotting.threshold_figure(
@@ -144,6 +160,9 @@ def run(
             two,
             f"{title} Thresholds Compartment {a.node}",
             xlabel,
+            ceiling=max_I,
+            resolution=resolution(stim, a.jpg_grid),
+            unit="nS" if stim == "EPSGpair" else "pA",
         )
         if a.out_dir:
             pathlib.Path(a.out_dir).mkdir(parents=True, exist_ok=True)

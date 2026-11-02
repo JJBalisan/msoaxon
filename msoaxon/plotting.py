@@ -174,6 +174,143 @@ def _panel(
     ax.set_xlim(0, t_end)
 
 
+def ceiling_mask(
+    values: np.ndarray | Sequence[float], ceiling: float
+) -> np.ndarray:
+    """Marks the thresholds that are a search's ceiling, not a measurement.
+
+    threshold.binary_search returns its ceiling (max_I) when nothing fires
+    below it, as BinarySearch.m does: such a point means "no threshold
+    found", not "threshold = ceiling".
+
+    Args:
+        values: The thresholds.
+        ceiling: The search's ceiling.
+
+    Returns:
+        A boolean array, True where a value is at (or above) the ceiling.
+    """
+    return np.asarray(values, dtype=float) >= ceiling
+
+
+def plot_thresholds(
+    ax: matplotlib.axes.Axes,
+    x: np.ndarray | Sequence[float],
+    values: np.ndarray | Sequence[float],
+    ceiling: float | None = None,
+    **kw: Any,
+) -> np.ndarray:
+    """Draws one threshold curve, with ceiling points drawn apart.
+
+    Every point gets a marker, so the search's rounding reads as a
+    resolution rather than as structure. A point at the ceiling (see
+    ceiling_mask) is a hollow marker on the ceiling and the line breaks
+    there instead of joining it to its neighbours.
+
+    Args:
+        ax: The panel.
+        x: What the sweep varies, per point.
+        values: The thresholds.
+        ceiling: The search's ceiling, or None to mark nothing.
+        **kw: Passed to ax.plot for the curve (label, colour, style).
+
+    Returns:
+        The ceiling mask (all False when ceiling is None).
+    """
+    x, v = np.asarray(x, dtype=float), np.asarray(values, dtype=float)
+    hit = (
+        np.zeros(v.shape, dtype=bool)
+        if ceiling is None
+        else ceiling_mask(v, ceiling)
+    )
+    (line,) = ax.plot(x, np.where(hit, np.nan, v), marker="o", ms=3, **kw)
+    if hit.any():
+        ax.plot(
+            x[hit],
+            np.full(hit.sum(), float(ceiling)),
+            ls="none",
+            marker="o",
+            ms=5,
+            mfc="none",
+            color=line.get_color(),  # not the next colour in the cycle
+        )
+    return hit
+
+
+def colour_limits(
+    values: np.ndarray | Sequence[float], min_span: float = 0.1
+) -> tuple[float, float]:
+    """Returns colour-scale limits that never stretch a tiny spread.
+
+    An autoscaled colour bar maps any spread, however small, onto the
+    whole colour map; here the limits span at least min_span times the
+    median's magnitude, centred on the data.
+
+    Args:
+        values: The values the colours show.
+        min_span: The narrowest span, as a fraction of |median|.
+
+    Returns:
+        (vmin, vmax).
+    """
+    v = np.asarray(values, dtype=float)
+    lo, hi = float(v.min()), float(v.max())
+    span = max(hi - lo, min_span * abs(float(np.median(v)))) or 1.0
+    mid = (lo + hi) / 2
+    return mid - span / 2, mid + span / 2
+
+
+def wilson_interval(
+    p: np.ndarray | Sequence[float], n: int, z: float = 1.96
+) -> tuple[np.ndarray, np.ndarray]:
+    """Returns the Wilson score interval of binomial proportions.
+
+    Args:
+        p: Observed proportions (successes / n).
+        n: The number of trials behind each.
+        z: The normal quantile (1.96: a 95% interval).
+
+    Returns:
+        (lower, upper) bounds, one per proportion.
+    """
+    p = np.asarray(p, dtype=float)
+    z2n = z * z / n
+    centre = (p + z2n / 2) / (1 + z2n)
+    half = z / (1 + z2n) * np.sqrt(p * (1 - p) / n + z2n / (4 * n))
+    return centre - half, centre + half
+
+
+def width_strip(
+    ax: matplotlib.axes.Axes,
+    rows: Sequence[tuple[str, float, Any]],
+    unit: str = "us",
+) -> None:
+    """Draws widths centred on 0 as labelled bars, one per row.
+
+    For a strip under a panel with a symmetric x axis (a coincidence
+    window): the bars' heights carry no data, so the y axis is hidden.
+
+    Args:
+        ax: The strip.
+        rows: (label, width, colour) per bar, drawn top to bottom.
+        unit: The width's unit, written after each label.
+    """
+    for k, (label, w, colour) in enumerate(rows):
+        y = len(rows) - 1 - k
+        ax.plot([-w / 2, w / 2], [y, y], color=colour, lw=4, alpha=0.8)
+        ax.annotate(
+            f"{label}: {w:.0f} {_GLYPHS.get(unit, unit)}",
+            xy=(w / 2, y),
+            xytext=(4, 0),
+            textcoords="offset points",
+            va="center",
+            fontsize=6,
+        )
+    ax.set_ylim(-0.7, len(rows) - 0.3)
+    ax.yaxis.set_visible(False)
+    ax.spines["left"].set_visible(False)
+
+
 def input_trace(
     graph: dict[str, Any], t2: np.ndarray, x: np.ndarray
 ) -> np.ndarray:
@@ -387,6 +524,9 @@ def threshold_figure(
     two: np.ndarray | Sequence[float],
     title: str,
     xlabel: str,
+    ceiling: float | None = None,
+    resolution: float | None = None,
+    unit: str = "",
 ) -> matplotlib.figure.Figure:
     """Draws one panel of Making_Threshold_graphs.m.
 
@@ -396,14 +536,32 @@ def threshold_figure(
         two: The two-compartment thresholds.
         title: The panel title.
         xlabel: The x-axis label.
+        ceiling: The search's ceiling: points at it found no threshold
+            and are drawn as hollow markers on a labelled dotted line
+            (see plot_thresholds), or None.
+        resolution: The search's rounding, noted under the title so
+            steps of that size read as resolution, or None.
+        unit: The thresholds' unit, for the ceiling and resolution notes.
 
     Returns:
         The matplotlib figure.
     """
     fig = figure("single", height=2.6)
     ax = fig.subplots()
-    ax.plot(x_values, multi, label="Multi-Compartment")
-    ax.plot(x_values, two, label="Two-Compartment")
+    hit = plot_thresholds(
+        ax, x_values, multi, ceiling, label="Multi-Compartment"
+    )
+    hit |= plot_thresholds(ax, x_values, two, ceiling, label="Two-Compartment")
+    if hit.any():
+        ax.axhline(
+            ceiling,
+            color="0.5",
+            ls=":",
+            lw=0.8,
+            label=f"no threshold below {ceiling:g} {unit}".rstrip(),
+        )
+    if resolution is not None:
+        title = f"{title}\n(search resolution {resolution:g} {unit})"
     ax.set(title=title, xlabel=xlabel, ylabel="Threshold")
     ax.legend()
     return fig

@@ -10,9 +10,10 @@ import json
 import math
 import pathlib
 
+import matplotlib.pyplot as plt
 import pytest
 
-from msoaxon import _bisect, coincidence, constants
+from msoaxon import _bisect, coincidence, constants, plotting
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -349,3 +350,38 @@ def test_a_sweep_where_nothing_spikes_still_writes_its_results(
     assert res["located"] is None and res["extremes"] == {}
     assert res["default"]["status"] == "silent"
     assert plotted and plotted[0][2] is None  # the plot leaves it unmarked
+
+
+def test_plot_colour_scale_is_not_autoscaled(monkeypatch, tmp_path):
+    # the quick plane's spread: 199 to 201 us, 34 to 47 nS (#136)
+    figs = []
+    monkeypatch.setattr(plotting, "save", lambda fig, path: figs.append(fig))
+    points = [
+        {
+            "couple12": c12,
+            "couple21": c21,
+            "status": "fires",
+            "window_us": w,
+            "threshold": th,
+        }
+        for c12, c21, w, th in [
+            (0.5, 0.1, 199.0, 34.0),
+            (0.9, 0.1, 201.0, 47.0),
+            (0.9, 0.5, 200.0, 40.0),
+        ]
+    ]
+    script.plot(points, 0.4, None, tmp_path / "cp.png")
+    window_ax, threshold_ax = figs[0].axes[:2]
+    clims = [
+        next(c for c in ax.collections if c.get_array() is not None).get_clim()
+        for ax in (window_ax, threshold_ax)
+    ]
+    assert clims[0] == pytest.approx((190.0, 210.0))  # 10% of the median
+    assert clims[1] == pytest.approx((34.0, 47.0))  # wider already
+    # a coarse grid writes each cell's value
+    assert sorted(t.get_text() for t in window_ax.texts) == [
+        "199",
+        "200",
+        "201",
+    ]
+    plt.close(figs[0])
