@@ -22,7 +22,6 @@ lumped results they are compared with.
 """  # noqa: E501 (printed verbatim as --help)
 
 import argparse
-import json
 import pathlib
 from collections.abc import Iterable
 from concurrent import futures
@@ -121,6 +120,137 @@ def rin_tau(
     }
 
 
+def _compact(values: np.ndarray) -> list[float]:
+    """Rounds a drawn array to 6 significant digits (plotting.compact)."""
+    from msoaxon import plotting
+
+    return plotting.compact(values)
+
+
+def variant(args: dict[str, Any]) -> str:
+    """Names the dendritic variant a run used, for the figure's title.
+
+    Args:
+        args: The run's arguments (klt_from_soma, dendrite_ra).
+
+    Returns:
+        A one-line description.
+    """
+    klt = (
+        "KLT/h gradient from the soma's density"
+        if args.get("klt_from_soma")
+        else "KLT/h totals conserved"
+    )
+    return (
+        f"Dendritic 45-compartment variant: {klt}, "
+        f"dendrite Ra {args.get('dendrite_ra', 100.0):g} "
+        "\N{GREEK CAPITAL LETTER OMEGA} cm"
+    )
+
+
+def draw(res: dict[str, Any], args: dict[str, Any]) -> Any:
+    """Draws panels B, E and F from the results (or their JSON).
+
+    Args:
+        res: What run() writes to dendrites.json.
+        args: The run's arguments, for the variant in the title.
+
+    Returns:
+        The figure.
+    """
+    from msoaxon import plotting
+
+    B = res["B_epsp"]
+    E = res["E_window_bilateral_dendritic_us"]
+    delays = np.array(res["E_curves"]["delays_ms"])
+    curves = {
+        k: np.array(v) for k, v in res["E_curves"].items() if k != "delays_ms"
+    }
+    fd = np.array(res["F_soma_pair_curve"]["delays_ms"])
+    F = {
+        k: np.array(res["F_soma_pair_curve"][k])
+        for k in ("lumped", "dendritic")
+    }
+    fig = plotting.figure("double", height=4.0)
+    ax = fig.subplots(1, 3)
+    # lumped in the 45-compartment colour; the dendritic sites (a variant,
+    # dashed) in one sequential map by distance from the soma; dendritic KLT
+    # removed in grey
+    sites = dict(
+        zip(
+            (
+                "dendritic, EPSG at soma",
+                "dendritic, EPSG mid-dendrite (100 um)",
+                "dendritic, EPSG distal (180 um)",
+            ),
+            plotting.sequential([0, 100, 180], vmax=200),
+            strict=True,
+        )
+    )
+    for label, trace in res["B_traces"].items():
+        if label in sites:
+            style = {"color": sites[label], "ls": "--"}
+        elif label.startswith("lumped"):
+            style = plotting.model_style("multi")
+        else:
+            style = {"color": plotting.GREY, "ls": ":"}
+        ax[0].plot(
+            trace["t_ms"],
+            trace["v_norm"],
+            label=plotting.glyphs(f"{label} ({B[label]['amp']:.1f} mV)"),
+            **style,
+        )
+    ax[0].set(
+        xlim=(-0.1, 2.5),
+        xlabel="Time from EPSG onset (ms)",
+        ylabel="Somatic EPSP (normalised)",
+        title="Unitary EPSP\nat the soma",
+    )
+    # below each panel: the entries do not fit beside the curves at 7 in
+    below = {"loc": "upper center", "bbox_to_anchor": (0.5, -0.25)}
+    ax[0].legend(**below)
+    plotting.threshold_ratio_panel(
+        ax[1],
+        delays,
+        [
+            (
+                th,
+                {
+                    "label": plotting.glyphs(
+                        f"bilateral dendritic, {kname}: "
+                        f"{E[kname]['margin_0.03']:.0f} us"
+                    ),
+                    # the kinetics as line style, as in coincidence_window
+                    "color": plotting.COLOURS["multi"],
+                    "ls": ls,
+                },
+            )
+            for (kname, th), ls in zip(curves.items(), ("-", "--"), strict=True)
+        ],
+    )
+    ax[1].set_title(
+        plotting.glyphs(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
+    )
+    ax[1].legend(**below)
+    for k, th in F.items():
+        ax[2].plot(
+            fd * 1e3,
+            th,
+            label=k,
+            **plotting.model_style("multi", 0 if k == "lumped" else 1),
+        )
+    ax[2].set(
+        xlabel=plotting.units("Delay between EPSGs", "us"),
+        ylabel=plotting.units("Threshold", "nS per EPSG"),
+        title="EPSG pair at the soma:\nlumped vs dendritic",
+    )
+    ax[2].legend()
+    for a_, letter in zip(ax, "BEF", strict=True):
+        plotting.panel_label(a_, letter)
+    fig.suptitle(variant(args))
+    return fig
+
+
 def main() -> None:
     """Parses the command line and runs the dendritic checks."""
     ap = argparse.ArgumentParser(
@@ -147,7 +277,21 @@ def main() -> None:
         help="axial resistivity of the dendrites [Ohm cm] "
         "(Mathews et al 2010: 200)",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        from msoaxon import plotting
+
+        plotting.agg()
+        d = plotting.load(a.replot)
+        for path in plotting.save(draw(d, d["meta"]["args"]), a.replot):
+            print(f"saved {path}")
+        return
     # one pool for every parallel call below
     with msoaxon.process_pool() as pool:
         run(a, pool)
@@ -356,89 +500,25 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     }
     print("G", res["G_somatic_spike"], flush=True)
 
+    # what the figure draws: B's waveforms (normalised, within its window)
+    # and E's curves; F's are in F_soma_pair_curve
+    res["B_traces"] = {}
+    for label, (g, v) in traces.items():
+        keep = (g - 5 >= -0.1) & (g - 5 <= 2.5)
+        res["B_traces"][label] = {
+            "t_ms": _compact(g[keep] - 5),
+            "v_norm": _compact(v[keep] / v.max()),
+        }
+    res["E_curves"] = {
+        "delays_ms": delays.tolist(),
+        **{k: v.tolist() for k, v in curves.items()},
+    }
     # imported here rather than at the top: pool workers re-import this script,
     # and only the main process draws
     from msoaxon import plotting
 
     plotting.agg()
-    fig = plotting.figure("double", height=4.0)
-    ax = fig.subplots(1, 3)
-    # lumped in the 45-compartment colour; the dendritic sites (a variant,
-    # dashed) in one sequential map by distance from the soma; dendritic KLT
-    # removed in grey
-    sites = dict(
-        zip(
-            (
-                "dendritic, EPSG at soma",
-                "dendritic, EPSG mid-dendrite (100 um)",
-                "dendritic, EPSG distal (180 um)",
-            ),
-            plotting.sequential([0, 100, 180], vmax=200),
-            strict=True,
-        )
-    )
-    for label, (g, v) in traces.items():
-        if label in sites:
-            style = {"color": sites[label], "ls": "--"}
-        elif label.startswith("lumped"):
-            style = plotting.model_style("multi")
-        else:
-            style = {"color": plotting.GREY, "ls": ":"}
-        ax[0].plot(
-            g - 5,
-            v / v.max(),
-            label=plotting.glyphs(f"{label} ({B[label]['amp']:.1f} mV)"),
-            **style,
-        )
-    ax[0].set(
-        xlim=(-0.1, 2.5),
-        xlabel="Time from EPSG onset (ms)",
-        ylabel="Somatic EPSP (normalised)",
-        title="Unitary EPSP\nat the soma",
-    )
-    # below each panel: the entries do not fit beside the curves at 7 in
-    below = {"loc": "upper center", "bbox_to_anchor": (0.5, -0.25)}
-    ax[0].legend(**below)
-    plotting.threshold_ratio_panel(
-        ax[1],
-        delays,
-        [
-            (
-                th,
-                {
-                    "label": plotting.glyphs(
-                        f"bilateral dendritic, {kname}: "
-                        f"{E[kname]['margin_0.03']:.0f} us"
-                    ),
-                    # the kinetics as line style, as in coincidence_window
-                    "color": plotting.COLOURS["multi"],
-                    "ls": ls,
-                },
-            )
-            for (kname, th), ls in zip(curves.items(), ("-", "--"), strict=True)
-        ],
-    )
-    ax[1].set_title(
-        plotting.glyphs(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
-    )
-    ax[1].legend(**below)
-    for k, th in F.items():
-        ax[2].plot(
-            fd * 1e3,
-            th,
-            label=k,
-            **plotting.model_style("multi", 0 if k == "lumped" else 1),
-        )
-    ax[2].set(
-        xlabel=plotting.units("Delay between EPSGs", "us"),
-        ylabel=plotting.units("Threshold", "nS per EPSG"),
-        title="EPSG pair at the soma:\nlumped vs dendritic",
-    )
-    ax[2].legend()
-    for a_, letter in zip(ax, "BEF", strict=True):
-        plotting.panel_label(a_, letter)
-    plotting.save(fig, out / "dendrites")
-    (out / "dendrites.json").write_text(json.dumps(res, indent=1))
+    plotting.save(draw(res, vars(a)), out / "dendrites", data=res, args=vars(a))
     print(f"saved {out}/dendrites.png, .pdf and .json")
 
 

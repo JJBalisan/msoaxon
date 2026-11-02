@@ -375,6 +375,8 @@ def plot(
     step: float,
     located: dict[str, Any] | None,
     path: pathlib.Path,
+    data: dict[str, Any] | None = None,
+    args: dict[str, Any] | None = None,
 ) -> None:
     """Draws the window and the threshold over the plane.
 
@@ -391,6 +393,8 @@ def plot(
         located: The point closest to the 45-compartment model, or None to
             leave it unmarked.
         path: Where to save the PNG (a PDF is written beside it).
+        data: The JSON to write beside it (see plotting.save), or None.
+        args: The script's arguments, for the JSON.
     """
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
@@ -516,7 +520,7 @@ def plot(
         "Two-compartment model over Goldwyn et al 2019's coupling plane\n"
         "(node 3's area ratio, channels and axonal Na)"
     )
-    plotting.save(fig, path)
+    plotting.save(fig, path, data=data, args=args)
 
 
 def main() -> None:
@@ -553,7 +557,18 @@ def main() -> None:
         help="three values per axis and a 300 nS ceiling: "
         "a smoke test, not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        d = json.loads(pathlib.Path(a.replot).read_text())
+        plot(d["points"], d["step"], d["located"], pathlib.Path(a.replot))
+        print(f"redrew {a.replot}")
+        return
     step = a.step or (QUICK_STEP if a.quick else DEFAULT_STEP)
     ceiling = a.ceiling or (QUICK_CEILING if a.quick else DEFAULT_CEILING)
     # the window is steep in the amplitude (0.5% above threshold it is a
@@ -604,30 +619,31 @@ def main() -> None:
             f"couple21={best['couple21']:.4g}, {best['window_us']:.1f} us, "
             f"{best['threshold']:.2f} nS, distance {best_d:.3f}"
         )
-    plot(results, step, best, out / "coupling_plane.png")
-    (out / "coupling_plane.json").write_text(
-        json.dumps(
-            _clean(
-                {
-                    "mode_requested": _fast.requested(a.mode),
-                    "quick": a.quick,
-                    "margin": MARGIN,
-                    "step": step,
-                    "ceiling_nS": ceiling,
-                    "reference": {
-                        "window_us": MULTI_WINDOW_US,
-                        "threshold_nS": MULTI_THRESHOLD_NS,
-                    },
-                    "points": results,
-                    "located": None
-                    if best is None
-                    else {**best, "distance": best_d},
-                    "default": default,
-                    "extremes": extremes(results),
-                }
-            ),
-            indent=1,
-        )
+    plot(
+        results,
+        step,
+        best,
+        out / "coupling_plane.png",
+        data=_clean(
+            {
+                "mode_requested": _fast.requested(a.mode),
+                "quick": a.quick,
+                "margin": MARGIN,
+                "step": step,
+                "ceiling_nS": ceiling,
+                "reference": {
+                    "window_us": MULTI_WINDOW_US,
+                    "threshold_nS": MULTI_THRESHOLD_NS,
+                },
+                "points": results,
+                "located": None
+                if best is None
+                else {**best, "distance": best_d},
+                "default": default,
+                "extremes": extremes(results),
+            }
+        ),
+        args=vars(a),
     )
     print(f"saved {out}/coupling_plane.png, .pdf and .json")
 

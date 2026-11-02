@@ -8,9 +8,9 @@ rebalanced so the cell doesn't fire spontaneously.
 """
 
 import argparse
-import json
 import pathlib
 import textwrap
+from typing import Any
 
 from msoaxon import multi, somatic
 
@@ -40,19 +40,27 @@ def main() -> None:
         help="1%% rheobase tolerance, 1.5x and 3x only: a smoke test, "
         "not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's somatic_spike.json, "
+        "beside it, without simulating",
+    )
     a = ap.parse_args()
-    out = pathlib.Path(a.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
     from msoaxon import plotting
 
     plotting.agg()
-    fig = plotting.figure("double", height=2.8)
-    axes = fig.subplots(1, len(CASES), sharey=True)
+    if a.replot:
+        for path in plotting.save(draw(plotting.load(a.replot)), a.replot):
+            print(f"saved {path}")
+        return
+    out = pathlib.Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
     results = {}
-    for ax, (name, (model, knobs)) in zip(axes, CASES.items(), strict=True):
+    for name, (model, knobs) in CASES.items():
         mem = multi.membrane(-68.0, **knobs) if knobs else None
         rb = somatic.rheobase(model, mem=mem, rel_tol=1e-2 if a.quick else 1e-4)
         rows = []
@@ -63,6 +71,7 @@ def main() -> None:
                     f"{name}: no distinct inflection at {k}x rheobase"
                 )
             t, x = r.pop("trace")  # the run the amplitude was measured on
+            keep = t >= 4.8  # the part the figure draws
             rows.append(
                 {
                     "multiple": k,
@@ -71,29 +80,13 @@ def main() -> None:
                         for key, v in r.items()
                         if key != "distinct"
                     },
+                    "trace": {
+                        "t_ms": plotting.compact(t[keep]),
+                        "soma_mV": plotting.compact(x[keep, 0]),
+                    },
                 }
             )
-            keep = t >= 4.8
-            # one sequential map over MULTS: the same multiple is the same
-            # colour in every panel, and in a quick run
-            (colour,) = plotting.sequential([k], min(MULTS), max(MULTS))
-            ax.plot(
-                t[keep],
-                x[keep, 0],
-                color=colour,
-                label=f"{k}x: {r['amplitude']:.1f} mV",
-            )
-            ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=5)
         results[name] = {"rheobase_pA": float(rb), "spikes": rows}
-        # wrapped: three long titles side by side on a 7 in figure
-        ax.set_title(f"{textwrap.fill(name, 30)}\nrheobase {rb:.0f} pA")
-        ax.set_xlabel("Time (ms)")
-        # below the panel: the spike and its dot fill the panel's corners
-        ax.legend(
-            title="rheobase multiple: amplitude\nfrom the inflection (dot)",
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.22),
-        )
         print(
             f"{name}: rheobase {rb:.0f} pA; "
             + ", ".join(
@@ -101,14 +94,58 @@ def main() -> None:
             ),
             flush=True,
         )
+    plotting.save(
+        draw(results), out / "somatic_spike", data=results, args=vars(a)
+    )
+    print(f"saved {out}/somatic_spike.png, .pdf and .json")
+
+
+def draw(results: dict[str, Any]) -> Any:
+    """Draws one panel per case from the results (or their JSON).
+
+    Args:
+        results: Per case: rheobase_pA and spikes, each spike with its
+            multiple, amplitude, inflection point and trace.
+
+    Returns:
+        The figure.
+    """
+    from msoaxon import plotting
+
+    cases = {k: v for k, v in results.items() if k != "meta"}
+    fig = plotting.figure("double", height=2.8)
+    axes = fig.subplots(1, len(cases), sharey=True)
+    for ax, (name, case) in zip(axes, cases.items(), strict=True):
+        for r in case["spikes"]:
+            # one sequential map over MULTS: the same multiple is the same
+            # colour in every panel, and in a quick run
+            (colour,) = plotting.sequential(
+                [r["multiple"]], min(MULTS), max(MULTS)
+            )
+            ax.plot(
+                r["trace"]["t_ms"],
+                r["trace"]["soma_mV"],
+                color=colour,
+                label=f"{r['multiple']}x: {r['amplitude']:.1f} mV",
+            )
+            ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=5)
+        # wrapped: three long titles side by side on a 7 in figure
+        ax.set_title(
+            f"{textwrap.fill(name, 30)}\nrheobase {case['rheobase_pA']:.0f} pA"
+        )
+        ax.set_xlabel("Time (ms)")
+        # below the panel: the spike and its dot fill the panel's corners
+        ax.legend(
+            title="rheobase multiple: amplitude\nfrom the inflection (dot)",
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.22),
+        )
     axes[0].set_ylabel("Soma voltage (mV)")
     fig.suptitle(
         "Somatic spike, 100 ms step (Scott et al 2005 protocol). "
         "Mature MSO: 17 ± 2 mV; dendrotoxin: 15 → 37 mV"
     )
-    plotting.save(fig, out / "somatic_spike")
-    (out / "somatic_spike.json").write_text(json.dumps(results, indent=1))
-    print(f"saved {out}/somatic_spike.png, .pdf and .json")
+    return fig
 
 
 if __name__ == "__main__":

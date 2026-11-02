@@ -12,6 +12,7 @@ from the ceiling to a step of 1. Points run in parallel across all CPUs unless
 import argparse
 import pathlib
 from concurrent import futures
+from typing import Any
 
 import numpy as np
 
@@ -90,12 +91,47 @@ def main() -> None:
     ap.add_argument(
         "--points", type=int, help="run only the first N points of each sweep"
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
-    if a.workers == 1:  # in-process, as binary_search(workers=1) does
+    if a.replot:
+        from msoaxon import plotting
+
+        plotting.agg()
+        for p in plotting.save(draw(plotting.load(a.replot)), a.replot):
+            print(f"saved {p}")
+    elif a.workers == 1:  # in-process, as binary_search(workers=1) does
         run(a, None)
     else:
         with msoaxon.process_pool(a.workers) as pool:  # shared by every sweep
             run(a, pool)
+
+
+def draw(d: dict[str, Any]) -> Any:
+    """Draws one sweep's figure from its data (or its JSON).
+
+    Args:
+        d: x, multi, two, title, xlabel, ceiling, resolution and unit.
+
+    Returns:
+        The figure.
+    """
+    from msoaxon import plotting
+
+    return plotting.threshold_figure(
+        d["x"],
+        d["multi"],
+        d["two"],
+        d["title"],
+        d["xlabel"],
+        ceiling=d["ceiling"],
+        resolution=d["resolution"],
+        unit=d["unit"],
+    )
 
 
 def run(
@@ -154,22 +190,25 @@ def run(
         _, _, max_I, title, xlabel = SWEEPS[stim]
         x_values, multi, two = sweeps[stim]
         print(f"{stim}: multi={multi}\n{' ' * len(stim)}  two  ={two}")
-        fig = plotting.threshold_figure(
-            x_values,
-            multi,
-            two,
-            f"{title} Thresholds Compartment {a.node}",
-            xlabel,
-            ceiling=max_I,
-            resolution=resolution(stim, a.jpg_grid),
-            unit="nS per EPSG" if stim == "EPSGpair" else "pA",
-        )
+        data = {
+            "stim": stim,
+            "node": a.node,
+            "x": x_values.tolist(),
+            "multi": list(multi),
+            "two": list(two),
+            "title": f"{title} Thresholds Compartment {a.node}",
+            "xlabel": xlabel,
+            "ceiling": max_I,
+            "resolution": resolution(stim, a.jpg_grid),
+            "unit": "nS per EPSG" if stim == "EPSGpair" else "pA",
+        }
+        fig = draw(data)
         if a.out_dir:
             pathlib.Path(a.out_dir).mkdir(parents=True, exist_ok=True)
             path = (
                 pathlib.Path(a.out_dir) / f"{stim}_thresholds_cpt{a.node}.png"
             )
-            for p in plotting.save(fig, path):
+            for p in plotting.save(fig, path, data=data, args=vars(a)):
                 print(f"saved {p}")
     if not a.out_dir:
         plt.show()

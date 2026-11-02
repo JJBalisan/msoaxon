@@ -3,6 +3,8 @@
 Also the threshold search, plotting and the combine_all script.
 """
 
+import json
+import math
 import pathlib
 import runpy
 import subprocess
@@ -383,6 +385,30 @@ def test_combine_all_script(tmp_path):
         and out.stat().st_size > 0
         and out.with_suffix(".pdf").stat().st_size > 0
     )
+    # the JSON redraws it without simulating (#139)
+    data = json.loads(out.with_suffix(".json").read_text())
+    assert data["graph"]["stimType"] == "EPSGpair" and data["graph"]["I"] == 100
+    assert len(data["y"][0]) == 45 and len(data["x"][0]) == 2
+    copy = tmp_path / "replot" / "fig.json"
+    copy.parent.mkdir()
+    copy.write_text(out.with_suffix(".json").read_text())
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "scripts" / "combine_all.py"),
+            "--replot",
+            str(copy),
+        ],
+        capture_output=True,
+        text=True,
+        env={"MPLBACKEND": "Agg", "PATH": ""},
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    shapes = [
+        mpl.image.imread(p).shape for p in (out, copy.with_suffix(".png"))
+    ]
+    assert shapes[0] == shapes[1]
 
 
 @pytest.mark.parametrize("model", [msoaxon.two_cpt, msoaxon.mso_axon])
@@ -713,3 +739,37 @@ def test_resonance_arms_use_their_model_colour():
     assert set(script["ARM_STYLES"]) == set(script["ARMS"])
     for name, (model, _) in script["ARM_STYLES"].items():
         assert script["ARMS"][name][0] == model  # never another model's
+
+
+def test_save_writes_the_replot_json(tmp_path):
+    fig = plotting.figure("single")
+    data = {"x": [1.0, 2.0], "nan": float("nan")}
+    paths = plotting.save(fig, tmp_path / "f.png", data=data, args={"n": 1})
+    assert paths[-1] == tmp_path / "f.json"
+    d = plotting.load(tmp_path / "f.png")  # found beside the figure
+    assert d["x"] == [1.0, 2.0] and math.isnan(d["nan"])
+    assert d["meta"]["args"] == {"n": 1}
+    assert d["meta"]["version"] == plotting.version() != ""
+    assert d["meta"]["mode"] in ("exact", "fast", "native")
+    # a replot (no data) rewrites the figure, not the JSON; .json is dropped
+    paths = plotting.save(plotting.figure(), tmp_path / "f.json")
+    assert paths == [tmp_path / "f.png", tmp_path / "f.pdf"]
+    again = plotting.load(tmp_path / "f.json")
+    assert math.isnan(again.pop("nan"))
+    assert {k: v for k, v in d.items() if k != "nan"} == again
+
+
+def test_version_falls_back_without_git(monkeypatch):
+    plotting.version.cache_clear()
+    monkeypatch.setattr(plotting.shutil, "which", lambda _: None)
+    try:
+        assert plotting.version() == f"msoaxon {msoaxon.__version__}"
+    finally:
+        plotting.version.cache_clear()
+
+
+def test_compact_and_thin():
+    assert plotting.compact([1.23456789, 1234567.89]) == [1.23457, 1234570.0]
+    assert plotting.compact([[0.1, float("nan")]])[0][0] == 0.1
+    assert plotting.thin(5000) == slice(None, None, 3)
+    assert plotting.thin(100) == slice(None, None, 1)

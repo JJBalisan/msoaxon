@@ -5,8 +5,10 @@
 # (the docstring is argparse's --help text, so the formatter leaves it as is)
 
 import argparse
+from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 import msoaxon
 from msoaxon import plotting, spiking
@@ -25,6 +27,27 @@ DEFAULTS = {
     "Synaptic": (15.0, 0.0),
     "SynapticPair": (15.0, 0.0),
 }
+
+
+def syn_params(t_end: float) -> msoaxon.SynParams:
+    """Returns the synaptic settings of Combine_all.m for a run length."""
+    return msoaxon.SynParams(t_end=t_end, random_in=1396, diff=1.0, f=200.0)
+
+
+def draw(d: dict[str, Any]) -> Any:
+    """Draws the figure from its data (or its JSON).
+
+    Args:
+        d: The graph settings (without Syn, rebuilt from tEnd) and the runs'
+            times and states as drawn: t1, y (the 45 compartments' voltages),
+            t2, x and t3, z (soma and axon).
+
+    Returns:
+        The figure.
+    """
+    graph = {**d["graph"], "Syn": syn_params(d["graph"]["tEnd"])}
+    runs = (np.asarray(d[k]) for k in ("t1", "y", "t2", "x", "t3", "z"))
+    return plotting.graphing(graph, *runs)
 
 
 def main() -> None:
@@ -68,14 +91,26 @@ def main() -> None:
     )
     ap.add_argument(
         "--out",
-        help="save the figure here (PNG and PDF) instead of showing it",
+        help="save the figure here (PNG and PDF, and the JSON --replot "
+        "reads) instead of showing it",
+    )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
     )
     a = ap.parse_args()
+    if a.replot:
+        plotting.agg()
+        for path in plotting.save(draw(plotting.load(a.replot)), a.replot):
+            print(f"saved {path}")
+        return
 
     stop, I = DEFAULTS[a.stim]
     stop = a.stop if a.stop is not None else stop
     I = a.I if a.I is not None else I
-    syn = msoaxon.SynParams(t_end=a.t_end, random_in=1396, diff=1.0, f=200.0)
+    syn = syn_params(a.t_end)
 
     args = (a.stim, a.start, stop, I)
     t1, y = msoaxon.mso_axon(
@@ -102,20 +137,31 @@ def main() -> None:
         f"two-compartment {n_two}"
     )
 
-    graph = {
-        "Type": a.graph,
-        "node": a.node,
-        "tEnd": a.t_end,
-        "stimType": a.stim,
-        "inputNode": a.input_node,
-        "start": a.start,
-        "stop": stop,
-        "I": I,
-        "Syn": syn,
+    # what the figure draws, thinned to what a 7 in figure shows and rounded
+    # to 6 significant digits: the 45 compartments' voltages (Contour and
+    # Multigraph), and the two-compartment soma and axon
+    s1, s2, s3 = (plotting.thin(len(t)) for t in (t1, t2, t3))
+    data = {
+        "graph": {
+            "Type": a.graph,
+            "node": a.node,
+            "tEnd": a.t_end,
+            "stimType": a.stim,
+            "inputNode": a.input_node,
+            "start": a.start,
+            "stop": stop,
+            "I": I,
+        },
+        "t1": plotting.compact(t1[s1]),
+        "y": plotting.compact(y[s1, :45]),
+        "t2": plotting.compact(t2[s2]),
+        "x": plotting.compact(x[s2, :2]),
+        "t3": plotting.compact(t3[s3]),
+        "z": plotting.compact(z[s3, :2]),
     }
-    fig = plotting.graphing(graph, t1, y, t2, x, t3, z)
-    if a.out:  # out.png writes out.png and out.pdf
-        for path in plotting.save(fig, a.out):
+    fig = plotting.graphing({**data["graph"], "Syn": syn}, t1, y, t2, x, t3, z)
+    if a.out:  # out.png writes out.png, out.pdf and out.json
+        for path in plotting.save(fig, a.out, data=data, args=vars(a)):
             print(f"saved {path}")
     else:
         plt.show()
