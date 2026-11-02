@@ -24,6 +24,9 @@ same version as the package, bumped in the same release PR.
   7.0 in wide (3.4 in for a threshold panel), at 300 dpi, with a PDF beside
   each PNG. `coincidence_window.py` panel A and `dendrites.py` panel E share
   one function. Display only; no computed number changes (#137).
+- The configuration in `FiresWithoutInputError` and `spike_height`
+  messages names `klt_to_leak` in `mem=membrane(...)`, read from the
+  morphology's key where the setting lives; no result changes (#129).
 
 ## 1.9.0 (29 Oct 2026)
 
