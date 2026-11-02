@@ -1,0 +1,10 @@
+# markdownlint rules for every repo; copy to the repo root as
+# .markdownlint.yaml. markdownlint-cli (the pre-commit hook) and editor
+# extensions both read it from there.
+default: true
+# Line length is the .editorconfig's job.
+MD013: false
+# Keep a Changelog repeats "### Added" / "### Fixed" under every release, so
+# a heading may repeat as long as its siblings differ.
+MD024:
+  siblings_only: true
