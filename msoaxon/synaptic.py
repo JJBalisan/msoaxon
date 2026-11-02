@@ -530,6 +530,21 @@ class SynParams:
     epsg_tau: tuple = EPSG_TAU
     events: tuple[Event, ...] = ()  # the "Events" stimulus (see Event)
 
+    def __post_init__(self) -> None:
+        """Checks the EPSG kinetics.
+
+        Raises:
+            ValueError: If either time constant is not > 0 or the two
+                are equal: epsg_inv_peak divides by their difference,
+                so either gives NaN conductances.
+        """
+        rise, decay = self.epsg_tau
+        if not (rise > 0 and decay > 0 and rise != decay):
+            raise ValueError(
+                "epsg_tau needs two different positive time constants, "
+                f"got {self.epsg_tau!r}"
+            )
+
 
 def event_syn(
     source: Source, delay: float, amp: float, t_end: float
