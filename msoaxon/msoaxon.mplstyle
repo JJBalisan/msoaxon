@@ -1,0 +1,29 @@
+# The figures' shared style, loaded by msoaxon.plotting.use_style(). Sized
+# for a two-column paper: figures are 3.4 in (single column) or 7.0 in
+# (double) wide, so text is 7 to 8 pt and never below 6 pt.
+
+font.size: 8
+axes.titlesize: 8
+axes.labelsize: 8
+figure.titlesize: 9
+xtick.labelsize: 7
+ytick.labelsize: 7
+legend.fontsize: 7
+legend.title_fontsize: 7
+legend.frameon: False
+
+lines.linewidth: 1.2
+lines.markersize: 4
+axes.linewidth: 0.6
+axes.spines.top: False
+axes.spines.right: False
+axes.grid: False
+xtick.major.width: 0.6
+ytick.major.width: 0.6
+
+figure.constrained_layout.use: True
+savefig.dpi: 300
+# text stays text in the PDF (TrueType, not outlines) and in an SVG
+pdf.fonttype: 42
+ps.fonttype: 42
+svg.fonttype: none

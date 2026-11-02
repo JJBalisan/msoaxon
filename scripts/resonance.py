@@ -166,17 +166,21 @@ def markdown(results: dict[str, Any]) -> str:
 
 
 def plot(results: dict[str, Any], path: pathlib.Path) -> None:
-    """Draws the three curves of every arm."""
+    """Draws the three curves of every arm, as path.png and path.pdf."""
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.4))
+    plotting.agg()
+    fig = plotting.figure("double", height=3.4)
+    axes = fig.subplots(1, 3)
     panels = (
-        ("subthreshold", "z", "Soma impedance |Z| (MOhm)", "Frequency (Hz)"),
+        (
+            "subthreshold",
+            "z",
+            plotting.units("Soma impedance |Z|", "MOhm"),
+            "Frequency (Hz)",
+        ),
         ("spike", "thresholds", "Sine-train threshold (pA)", "Frequency (Hz)"),
         (
             "epsg",
@@ -188,18 +192,19 @@ def plot(results: dict[str, Any], path: pathlib.Path) -> None:
     for ax, (key, ykey, ylabel, xlabel) in zip(axes, panels, strict=True):
         for name, r in results.items():
             d = r[key]
-            ax.plot(d["freqs"], d[ykey], ".-", ms=4, lw=1.2, label=name)
+            ax.plot(d["freqs"], d[ykey], ".-", label=name)
         ax.axvline(TARGETS[key], color="k", ls=":", lw=1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         if key != "subthreshold":
             ax.set_yscale("log")
-    axes[0].legend(fontsize=7, frameon=False)
-    fig.suptitle(
-        "Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)", fontsize=10
+    # one legend for the three panels, below them: at 7 in the arm names are
+    # wider than a panel
+    fig.legend(
+        *axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=2
     )
-    fig.tight_layout()
-    fig.savefig(path, dpi=130)
+    fig.suptitle("Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)")
+    plotting.save(fig, path)
 
 
 def main() -> None:
@@ -250,7 +255,7 @@ def main() -> None:
             indent=1,
         )
     )
-    print(f"saved {out}/resonance.png and .json")
+    print(f"saved {out}/resonance.png, .pdf and .json")
 
 
 if __name__ == "__main__":
