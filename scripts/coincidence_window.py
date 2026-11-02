@@ -42,6 +42,25 @@ CONFIGS = {
 }
 
 
+def strip_rows(
+    direct: dict[tuple[str, str], dict[float, float]], colours: list[str]
+) -> list[tuple[str, float, str]]:
+    """Returns the bars of the window strip: each model's 3% window.
+
+    Args:
+        direct: window()'s half-widths [us] by (model, kinetics) and margin.
+        colours: One colour per model, in CONFIGS order.
+
+    Returns:
+        (short model name, width [us], colour) per model, model EPSG.
+    """
+    kname = next(iter(KINETICS))
+    return [
+        (cname.split(" (")[0], direct[cname, kname][0.03], c)
+        for cname, c in zip(CONFIGS, colours, strict=True)
+    ]
+
+
 def main() -> None:
     """Parses the command line and runs the coincidence-window comparison."""
     ap = argparse.ArgumentParser(
@@ -198,7 +217,10 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
 
     plotting.agg()
     fig = plotting.figure("double", height=4.4)
-    a1, a2 = fig.subplots(1, 2)
+    gs = fig.add_gridspec(2, 2, height_ratios=(4, 1))
+    a1 = fig.add_subplot(gs[:, 0])
+    a2 = fig.add_subplot(gs[0, 1])
+    strip = fig.add_subplot(gs[1, 1], sharex=a2)
     colours = ["#1f5fa8", "#d2691e", "#2e8b57"]
     plotting.threshold_ratio_panel(
         a1,
@@ -226,43 +248,43 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     plotting.panel_label(a1, "A")
 
     sym = np.concatenate([-mc_delays[:0:-1], mc_delays]) * 1e3
-    a2.plot(
+    p_sym = np.concatenate([prob[:0:-1], prob])
+    lo, hi = plotting.wilson_interval(p_sym, a.trials)
+    a2.errorbar(
         sym,
-        np.concatenate([prob[:0:-1], prob]),
-        "o-",
+        p_sym,
+        yerr=[p_sym - lo, hi - p_sym],
+        fmt="o-",
         color=colours[1],
-        label=f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us)",
+        capsize=2,
+        label=f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us;\n"
+        f"{a.trials} trials per delay, 95% Wilson interval)",
     )
-    for c, cname, y in zip(
-        colours, CONFIGS, (0.56, 0.5, 0.44), strict=True
-    ):  # offset so all show
-        w = direct[cname, list(KINETICS)[0]][0.03]
-        a2.plot(
-            [-w / 2, w / 2],
-            [y, y],
-            color=c,
-            lw=4,
-            alpha=0.8,
-            label=f"{cname.split(' (')[0]}: {w:.0f} us (window(), 3%)",
+    for ax in (a2, strip):
+        ax.axvspan(
+            -MYOGA_US / 2,
+            MYOGA_US / 2,
+            color="0.85",
+            zorder=0,
+            label=f"Myoga 2014 in vitro: {MYOGA_US} us",
         )
-    a2.axvspan(
-        -MYOGA_US / 2,
-        MYOGA_US / 2,
-        color="0.85",
-        zorder=0,
-        label=f"Myoga 2014 in vitro: {MYOGA_US} us",
-    )
     a2.set(
         xlim=(-320, 320),
         ylim=(-0.03, 1.05),
-        xlabel=plotting.units("Delay between EPSGs", "us"),
         ylabel="Spike probability",
-        title=(
-            "Coincidence window at half maximum\n"
-            "(model EPSG; bars offset around 0.5)"
-        ),
+        title="Coincidence window at half maximum (model EPSG)",
     )
-    a2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1)
+    a2.tick_params(labelbottom=False)
+    # window()'s widths in their own strip: a bar's height carries no data
+    plotting.width_strip(strip, strip_rows(direct, colours))
+    strip.set_xlabel(plotting.units("Delay between EPSGs", "us"))
+    strip.set_title("window(), 3% margin", fontsize=7, loc="left")
+    # below the strip, as panel A's is below A
+    strip.legend(
+        *a2.get_legend_handles_labels(),
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.9),
+    )
     plotting.panel_label(a2, "B")
     plotting.save(fig, out / "coincidence_window")
 

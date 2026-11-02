@@ -51,6 +51,22 @@ or return a meaningless result, and the golden traces are bit-identical.
   `membrane()`, the #41 note and an over-long line in this file, and
   `ruff.toml`'s header (#72).
 
+### Fixed
+
+- Threshold figures no longer draw a search's ceiling as a measurement:
+  a point equal to `max_I` ("no threshold found") is a hollow marker on a
+  labelled dotted line, unjoined to the curve, and every point has a
+  marker, with the search's rounding (10 pA, 1 for EPSGpair) under the
+  title. New `plotting.ceiling_mask` and `plotting.plot_thresholds` (#136).
+- The coupling plane's colour scales span at least 10% of their median
+  (`plotting.colour_limits`) instead of stretching a 2 µs spread over the
+  whole map, and a coarse grid writes each cell's value (#136).
+- `coincidence_window.png` draws `window()`'s widths in a strip under the
+  probability panel instead of at invented heights on the probability
+  axis, and gives each noisy-trial probability a 95% Wilson interval
+  (`plotting.wilson_interval`, `plotting.width_strip`), with the trial
+  count in the legend. Display only; no computed number changes (#136).
+
 ## 1.9.0 (29 Oct 2026)
 
 `rebalance_rest=True` no longer builds a cell that fires on its own (#128):

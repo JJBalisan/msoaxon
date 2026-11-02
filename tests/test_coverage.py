@@ -534,3 +534,103 @@ def test_crossing_works_in_either_direction():
         respond, 1.0, 0.0, lambda n, y: 1e-4, 10.0, [(1.0, respond(1.0)[1])]
     )
     assert near <= 0.1 <= far and far - near <= 1e-4
+
+
+def test_threshold_figure_draws_the_ceiling_apart():
+    # the ramp sweep's first point returns the ceiling in both models (#136)
+    x = [5.1, 5.2, 5.3]
+    multi, two = [15000.0, 14130.0, 9990.0], [15000.0, 13710.0, 9700.0]
+    fig = plotting.threshold_figure(
+        x, multi, two, "Ramp", "x", ceiling=15000, resolution=10, unit="pA"
+    )
+    ax = fig.axes[0]
+    curves = [line for line in ax.lines if line.get_label().endswith("ment")]
+    for line in curves:  # every point marked, the ceiling point left out
+        assert line.get_marker() == "o"
+        assert np.isnan(line.get_ydata()[0])
+        assert not np.isnan(line.get_ydata()[1:]).any()
+    hollow = [line for line in ax.lines if line.get_markerfacecolor() == "none"]
+    assert len(hollow) == 2
+    for line in hollow:
+        assert list(line.get_xdata()) == [5.1]
+        assert list(line.get_ydata()) == [15000]
+    labels = ax.get_legend_handles_labels()[1]
+    assert "no threshold below 15000 pA" in labels
+    assert "search resolution 10 pA" in ax.get_title()
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_without_ceiling_hits_has_no_ceiling_line():
+    fig = plotting.threshold_figure(
+        [1, 2], [48, 50], [48, 50], "EPSGpair", "x", ceiling=150
+    )
+    labels = fig.axes[0].get_legend_handles_labels()[1]
+    assert labels == ["Multi-Compartment", "Two-Compartment"]
+    mpl.pyplot.close(fig)
+
+
+def test_ceiling_mask():
+    np.testing.assert_array_equal(
+        plotting.ceiling_mask([15000, 14990, 15000.0], 15000),
+        [True, False, True],
+    )
+
+
+def test_colour_limits_have_a_minimum_span():
+    # the quick coupling plane's windows: a 2 us spread around 200 us
+    lo, hi = plotting.colour_limits([199.0, 200.5, 201.0])
+    assert hi - lo == pytest.approx(20.05)  # 10% of the 200.5 median
+    assert (lo + hi) / 2 == pytest.approx(200.0)
+    # a spread wider than the minimum is kept as it is
+    assert plotting.colour_limits([10.0, 50.0]) == (10.0, 50.0)
+    assert plotting.colour_limits([0.0, 0.0]) == (-0.5, 0.5)
+
+
+def test_wilson_interval():
+    lo, hi = plotting.wilson_interval([0.0, 0.5, 1.0], 10)
+    # 0 of 10: [0, 0.2775]; symmetric around 0.5; 10 of 10 mirrors 0 of 10
+    np.testing.assert_allclose(lo, [0, 0.2366, 0.7225], atol=1e-4)
+    np.testing.assert_allclose(hi, [0.2775, 0.7634, 1], atol=1e-4)
+
+
+def test_width_strip_draws_the_widths_centred():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    plotting.width_strip(ax, [("a", 211.0, "C0"), ("b", 172.0, "C1")])
+    assert [list(line.get_xdata()) for line in ax.lines] == [
+        [-105.5, 105.5],
+        [-86.0, 86.0],
+    ]
+    assert [t.get_text() for t in ax.texts] == [
+        "a: 211 \N{MICRO SIGN}s",
+        "b: 172 \N{MICRO SIGN}s",
+    ]
+    assert not ax.yaxis.get_visible()
+    mpl.pyplot.close(fig)
+
+
+def test_coincidence_strip_rows_are_the_three_percent_windows():
+    script = runpy.run_path(str(REPO / "scripts" / "coincidence_window.py"))
+    kinetics = list(script["KINETICS"])
+    direct = {
+        (c, k): {0.005: 1.0 + i, 0.03: 100.0 + i}
+        for i, c in enumerate(script["CONFIGS"])
+        for k in kinetics
+    }
+    rows = script["strip_rows"](direct, ["r", "g", "b"])
+    assert rows == [
+        ("45-compartment", 100.0, "r"),
+        ("2-cpt, TwoCpt.m", 101.0, "g"),
+        ("2-cpt, Goldwyn 2019", 102.0, "b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "stim, jpg_grid, expected",
+    [("ramp", False, 10), ("EPSGpair", False, 1), ("EPSGpair", True, None)],
+)
+def test_threshold_resolution(stim, jpg_grid, expected):
+    script = runpy.run_path(
+        str(REPO / "scripts" / "making_threshold_graphs.py")
+    )
+    assert script["resolution"](stim, jpg_grid) == expected
