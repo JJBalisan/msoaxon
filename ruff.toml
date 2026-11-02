@@ -1,5 +1,6 @@
-# Ruff config approximating the Google Python Style Guide, from the shared
-# repo-audit toolchain (2026-10-05), adjusted for this repo.
+# Ruff config approximating the Google Python Style Guide, adjusted for this
+# repo. The house rules live in the dev-toolchain repo (templates/ruff.toml);
+# this file stands alone, so CI needs nothing outside the repo.
 # https://google.github.io/styleguide/pyguide.html
 #
 # The Python package is the reference (the .m files are the historical
