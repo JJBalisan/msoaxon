@@ -6,6 +6,34 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+No published number moves: every input that is now refused used to fail
+or return a meaningless result, and the golden traces are bit-identical.
+
+### Changed
+
+- Arguments no cell or search can use raise a `ValueError` naming the
+  argument, before any simulation: `coincidence.window` and
+  `window_edges` with `margin <= 0` (the delay search assumes the input
+  spikes at its best delay), `half_width` with `margin < 0`, a float
+  spike criterion `<= 0` (`ZeroDivisionError` or `inf` before),
+  `multi.with_dendrites` with `n_seg`, `length` or `diameter <= 0`,
+  `mso_axon` and `two_cpt` with `t_end <= 0` or `max_step <= 0`
+  (`mso_axon(max_step=0)` silently ran with its default),
+  `two_cpt(r1 <= 0)`, and `SynParams` with equal or non-positive
+  `epsg_tau` (NaN conductances before) (#72).
+- `spiking.matlab_round(x, digits)` with `digits > 0` divides by
+  `10 ** digits`, so `matlab_round(0.3, 1)` is 0.3, not
+  0.30000000000000004; `digits <= 0`, the only values the package uses,
+  is unchanged bit for bit (#72).
+- Coverage floor (`fail_under`) raised from 90 to 95, just under
+  the 96.1% the full suite measures without the Rust extension, as
+  CI's coverage job runs (#72).
+- Docs: `coincidence.window`'s run count, `Morphology.g_na`'s note on
+  `membrane()`, the #41 note and an over-long line in this file, and
+  `ruff.toml`'s header (#72).
+
 ## 1.9.0 (29 Oct 2026)
 
 `rebalance_rest=True` no longer builds a cell that fires on its own (#128):
@@ -562,8 +590,9 @@ Tests and housekeeping only; results are unchanged.
 
 - 1.2.0's "13 runs instead of 11" for the 45-compartment, model-EPSG 3%
   window counts the delay search's probes; counting `window()`'s
-  `max_delay` probe as well gives 14. #41 tracks whether the hedge should
-  apply to that search.
+  `max_delay` probe as well gives 14. #41 looked at whether the hedge
+  should apply to that search and closed it as accepted, with no change:
+  other hedge values save that one window and move others by one run.
 - `msoAxon.m~`, a tracked editor backup that differs from `msoAxon.m`, is
   kept as part of the historical record (an earlier draft of the 45-CPT
   model); README.md now says so, and `*~` is ignored so no new backups get
@@ -600,9 +629,10 @@ Tests and housekeeping only; results are unchanged.
   the multi and two step responses rise smoothly through the 10 mV
   criterion (9.96 mV at 0.9999x, 10.02 at 1.00005x; the spike takes off
   1-2% above), as the EPSG pairs do: with the overshoot hedge above,
-  rheobase takes 10 runs instead of 15 for both multi and two. With KLT blocked the response is all
-  or none (0.3 mV just below, a 15 mV spike just above); there the search
-  makes exactly bisection's 19 runs, to the same value. Rheobase moves
+  rheobase takes 10 runs instead of 15 for both multi and two. With KLT
+  blocked the response is all or none (0.3 mV just below, a 15 mV spike
+  just above); there the search makes exactly bisection's 19 runs, to the
+  same value. Rheobase moves
   within rel_tol (multi 3784.180 -> 3784.101 pA, -2.1e-5; two 3845.947 ->
   3845.990 pA, +1.1e-5; KLT blocked unchanged), and rheobase now depends on
   the search, so this is a minor version (#19).
