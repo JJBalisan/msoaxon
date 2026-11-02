@@ -272,6 +272,9 @@ def test_graph_types_render(runs, kind):
     graph, data = runs
     fig = plotting.graphing({**graph, "Type": kind}, *data)
     assert fig.axes
+    assert fig.get_size_inches()[0] == plotting.WIDTHS["double"]
+    fig.canvas.draw()  # resolves tick labels, so every text has its size
+    assert min(t.get_fontsize() for t in fig.findobj(mpl.text.Text)) >= 6
     mpl.pyplot.close(fig)
 
 
@@ -282,9 +285,78 @@ def test_two_compartment_graph_and_unknown_type(runs):
     )
     with pytest.raises(ValueError):
         plotting.graphing({**graph, "Type": "Nope"}, t2, x)
-    mpl.pyplot.close(
-        plotting.threshold_figure([0, 1], [1, 2], [1, 2], "t", "x")
+    fig = plotting.threshold_figure([0, 1], [1, 2], [1, 2], "t", "x")
+    assert fig.get_size_inches()[0] == plotting.WIDTHS["single"]
+    mpl.pyplot.close(fig)
+
+
+def test_style_file_sets_paper_defaults():
+    plotting.use_style()
+    rc = mpl.rcParams
+    assert rc["savefig.dpi"] == 300
+    assert rc["pdf.fonttype"] == 42  # text stays text in the PDF
+    assert rc["figure.constrained_layout.use"]
+    assert not rc["axes.spines.top"] and not rc["axes.spines.right"]
+    assert min(rc["xtick.labelsize"], rc["legend.fontsize"]) >= 6
+
+
+@pytest.mark.parametrize(
+    "width, inches", [("single", 3.4), ("double", 7.0), (5, 5.0)]
+)
+def test_figure_widths(width, inches):
+    fig = plotting.figure(width)
+    assert tuple(fig.get_size_inches()) == (inches, 0.75 * inches)
+    mpl.pyplot.close(fig)
+    fig = plotting.figure(width, height=2.0)
+    assert fig.get_size_inches()[1] == 2.0
+    mpl.pyplot.close(fig)
+
+
+@pytest.mark.parametrize("name", ["out", "out.png", "out.pdf"])
+def test_save_writes_png_and_pdf(tmp_path, name):
+    fig = plotting.figure("single")
+    fig.subplots().plot([0, 1], [0, 1])
+    paths = plotting.save(fig, tmp_path / name)
+    assert paths == [tmp_path / "out.png", tmp_path / "out.pdf"]
+    assert all(p.stat().st_size > 0 for p in paths)
+    assert not mpl.pyplot.fignum_exists(fig.number)  # save closes it
+    assert mpl.image.imread(paths[0]).shape[1] == round(3.4 * 300)
+
+
+def test_save_svg_on_request(tmp_path):
+    paths = plotting.save(plotting.figure(), tmp_path / "f", svg=True)
+    assert [p.suffix for p in paths] == [".png", ".pdf", ".svg"]
+    assert all(p.exists() for p in paths)
+
+
+def test_units_glyphs():
+    assert plotting.units("Delay", "us") == "Delay (\N{MICRO SIGN}s)"
+    assert (
+        plotting.units("Rin", "MOhm") == "Rin (M\N{GREEK CAPITAL LETTER OMEGA})"
     )
+    assert plotting.units("Threshold", "pA") == "Threshold (pA)"
+
+
+def test_panel_label_and_threshold_ratio_panel():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    th = np.array([40.0, 44.0, 80.0])
+    plotting.threshold_ratio_panel(
+        ax,
+        [0.0, 0.1, 0.2],
+        [(th, {"label": "a"}), (2 * th, {"ls": "--"})],
+        margins=(0.005, 0.03),
+    )
+    plotting.panel_label(ax, "E")
+    curves, hlines = ax.lines[:2], ax.lines[2:]
+    for line in curves:  # each curve over its own zero-delay threshold
+        np.testing.assert_allclose(line.get_xdata(), [0, 100, 200])
+        np.testing.assert_allclose(line.get_ydata(), th / 40)
+    assert curves[1].get_linestyle() == "--"
+    assert [h.get_ydata()[0] for h in hlines] == [1.005, 1.03]
+    assert ax.get_ylim() == (0.98, 2.05)
+    assert "E" in [t.get_text() for t in ax.texts]
+    mpl.pyplot.close(fig)
 
 
 def test_combine_all_script(tmp_path):
@@ -309,6 +381,7 @@ def test_combine_all_script(tmp_path):
     assert (
         "multi-compartment 1, two-compartment 1" in r.stdout
         and out.stat().st_size > 0
+        and out.with_suffix(".pdf").stat().st_size > 0
     )
 
 

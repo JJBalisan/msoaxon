@@ -386,19 +386,18 @@ def plot(
         step: The grid spacing, which sizes the squares.
         located: The point closest to the 45-compartment model, or None to
             leave it unmarked.
-        path: Where to save the PNG.
+        path: Where to save the PNG (a PDF is written beside it).
     """
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.4), sharey=True)
+    plotting.agg()
+    fig = plotting.figure("double", height=3.3)
+    axes = fig.subplots(1, 2, sharey=True)
     names = landmarks()
     for ax, key, title in (
-        (axes[0], "window_us", "3% coincidence window (us)"),
+        (axes[0], "window_us", plotting.units("3% coincidence window", "us")),
         (axes[1], "threshold", "Coincident threshold (nS)"),
     ):
         found = [
@@ -408,7 +407,10 @@ def plot(
         ]
         graded = [p for p in points if p["status"] == "graded"]
         lost = [p for p in points if p not in found and p not in graded]
-        size = 900 * step if step < 0.2 else 700
+        # the squares' areas [pt^2] from the 13 in figure this was drawn
+        # at, scaled to the 7 in one so each still fills the same share of
+        # its cell
+        size = (900 * step if step < 0.2 else 700) * (7.0 / 13) ** 2
         sc = ax.scatter(
             [p["couple12"] for p in found],
             [p["couple21"] for p in found],
@@ -433,13 +435,13 @@ def plot(
                 [p["couple21"] for p in group],
                 c="0.35",
                 marker=mark,
-                s=25,
+                s=12,
                 label=label,
             )
         ax.scatter(
             constants.COUPLING1,
             constants.COUPLING2,
-            s=6,
+            s=3,
             c="0.55",
             label="the 44 axon nodes' constants",
         )
@@ -454,7 +456,7 @@ def plot(
                 [c21],
                 c=colour,
                 marker=marker,
-                s=120,
+                s=60,
                 edgecolors="w",
                 label=name,
                 zorder=5,
@@ -465,26 +467,24 @@ def plot(
                 [located["couple21"]],
                 facecolors="none",
                 edgecolors="tab:orange",
-                s=380,
-                linewidths=2.2,
+                s=160,
+                linewidths=1.5,
                 zorder=6,
                 label="closest to the 45-compartment model",
             )
         ax.plot([0, 1], [0, 1], "k:", lw=0.8)  # forward = backward
         ax.set_xlim(0, 1.02)
         ax.set_ylim(0, 1.02)
-        ax.set_xlabel("forward coupling couple12 (soma to axon)")
+        ax.set_xlabel("forward coupling couple12\n(soma to axon)")
         ax.set_title(title)
         fig.colorbar(sc, ax=ax)
     axes[0].set_ylabel("backward coupling couple21 (axon to soma)")
-    axes[0].legend(fontsize=7, loc="upper left", frameon=True)
+    axes[0].legend(fontsize=6, loc="upper left", frameon=True)
     fig.suptitle(
-        "Two-compartment model over Goldwyn et al 2019's coupling plane "
-        "(node 3's area ratio, channels and axonal Na)",
-        fontsize=10,
+        "Two-compartment model over Goldwyn et al 2019's coupling plane\n"
+        "(node 3's area ratio, channels and axonal Na)"
     )
-    fig.tight_layout()
-    fig.savefig(path, dpi=130)
+    plotting.save(fig, path)
 
 
 def main() -> None:
@@ -597,7 +597,7 @@ def main() -> None:
             indent=1,
         )
     )
-    print(f"saved {out}/coupling_plane.png and .json")
+    print(f"saved {out}/coupling_plane.png, .pdf and .json")
 
 
 if __name__ == "__main__":

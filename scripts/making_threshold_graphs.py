@@ -63,7 +63,9 @@ def main() -> None:
         help="EPSGpair on the grid the repo's jpgs used: 11 points 0.1 ms "
         "apart, unrounded",
     )
-    ap.add_argument("--out-dir", help="save PNGs here instead of showing them")
+    ap.add_argument(
+        "--out-dir", help="save PNGs and PDFs here instead of showing them"
+    )
     ap.add_argument(
         "--workers",
         type=int,
@@ -148,8 +150,8 @@ def run(
             path = (
                 pathlib.Path(a.out_dir) / f"{stim}_thresholds_cpt{a.node}.png"
             )
-            fig.savefig(path, dpi=150)
-            print(f"saved {path}")
+            for p in plotting.save(fig, path):
+                print(f"saved {p}")
     if not a.out_dir:
         plt.show()
 

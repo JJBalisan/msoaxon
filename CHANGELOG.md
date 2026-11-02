@@ -8,8 +8,22 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
+### Added
+
+- `msoaxon/msoaxon.mplstyle`, the figures' shared style (8 pt text, 7 pt
+  ticks and legends, no top or right spines, constrained layout, 300 dpi,
+  text kept as text in PDFs), and in `msoaxon.plotting`: `use_style()`,
+  `agg()`, `figure(width="single" | "double" | inches)` at 3.4 or 7.0 in,
+  `save(fig, path)` writing PNG and PDF (SVG on request), `units()` (µs,
+  MΩ), `panel_label()` and `threshold_ratio_panel()` (#137).
+
 ### Changed
 
+- Every plotting script and `plotting.graphing` / `threshold_figure` draw
+  through `plotting.figure` and write through `plotting.save`: figures are
+  7.0 in wide (3.4 in for a threshold panel), at 300 dpi, with a PDF beside
+  each PNG. `coincidence_window.py` panel A and `dendrites.py` panel E share
+  one function. Display only; no computed number changes (#137).
 - The configuration in `FiresWithoutInputError` and `spike_height`
   messages names `klt_to_leak` in `mem=membrane(...)`, read from the
   morphology's key where the setting lives; no result changes (#129).

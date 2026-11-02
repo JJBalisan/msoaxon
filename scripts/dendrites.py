@@ -358,56 +358,53 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
 
     # imported here rather than at the top: pool workers re-import this script,
     # and only the main process draws
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(1, 3, figsize=(17, 4.8))
+    plotting.agg()
+    fig = plotting.figure("double", height=4.0)
+    ax = fig.subplots(1, 3)
     for label, (g, v) in traces.items():
         ax[0].plot(
-            g - 5,
-            v / v.max(),
-            lw=1.8,
-            label=f"{label} ({B[label]['amp']:.1f} mV)",
+            g - 5, v / v.max(), label=f"{label} ({B[label]['amp']:.1f} mV)"
         )
     ax[0].set(
         xlim=(-0.1, 2.5),
         xlabel="Time from EPSG onset (ms)",
         ylabel="Somatic EPSP (normalised)",
-        title="B. Unitary EPSP at the soma",
+        title="Unitary EPSP\nat the soma",
     )
-    ax[0].legend(fontsize=7, frameon=False)
-    for kname, th in curves.items():
-        ax[1].plot(
-            delays * 1e3,
-            th / th[0],
-            lw=2,
-            label=f"bilateral dendritic, {kname}: "
-            f"{E[kname]['margin_0.03']:.0f} us",
-        )
-    ax[1].axhline(1.03, color="0.5", ls=":", lw=0.8)
-    ax[1].set(
-        xlabel="Delay between EPSGs (us)",
-        ylabel="Threshold / coincident threshold",
-        title=f"E. Window at 3% margin (Myoga 2014: {MYOGA_US} us)",
-        ylim=(0.98, 2.05),
+    # below each panel: the entries do not fit beside the curves at 7 in
+    below = {"loc": "upper center", "bbox_to_anchor": (0.5, -0.25)}
+    ax[0].legend(**below)
+    plotting.threshold_ratio_panel(
+        ax[1],
+        delays,
+        [
+            (
+                th,
+                {
+                    "label": f"bilateral dendritic, {kname}: "
+                    f"{E[kname]['margin_0.03']:.0f} us"
+                },
+            )
+            for kname, th in curves.items()
+        ],
     )
-    ax[1].legend(fontsize=7.5, frameon=False, loc="lower right")
+    ax[1].set_title(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
+    ax[1].legend(**below)
     for k, th in F.items():
-        ax[2].plot(
-            fd * 1e3, th, lw=2, ls="-" if k == "lumped" else "--", label=k
-        )
+        ax[2].plot(fd * 1e3, th, ls="-" if k == "lumped" else "--", label=k)
     ax[2].set(
-        xlabel="Delay between EPSGs (us)",
+        xlabel=plotting.units("Delay between EPSGs", "us"),
         ylabel="Threshold (EPSG units)",
-        title="F. EPSG pair at the soma: lumped vs dendritic",
+        title="EPSG pair at the soma:\nlumped vs dendritic",
     )
-    ax[2].legend(frameon=False)
-    fig.tight_layout()
-    fig.savefig(out / "dendrites.png", dpi=130)
+    ax[2].legend()
+    for a_, letter in zip(ax, "BEF", strict=True):
+        plotting.panel_label(a_, letter)
+    plotting.save(fig, out / "dendrites")
     (out / "dendrites.json").write_text(json.dumps(res, indent=1))
-    print(f"saved {out}/dendrites.png and .json")
+    print(f"saved {out}/dendrites.png, .pdf and .json")
 
 
 if __name__ == "__main__":
