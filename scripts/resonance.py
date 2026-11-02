@@ -43,6 +43,17 @@ ARMS = {
         {"klt_to_leak": "slope"},
     ),
 }
+# each arm's (model, variant) for plotting.model_style: one colour per model,
+# its variants dashed, dotted or dash-dotted
+ARM_STYLES = {
+    "45-compartment (msoAxon.m)": ("multi", 0),
+    "45-compartment, rest rebalanced": ("multi", 2),
+    "45-compartment, KLT frozen at its resting conductance": ("multi", 3),
+    "45-compartment, KLT replaced by its slope conductance": ("multi", 1),
+    "2-compartment (TwoCpt.m)": ("two", 0),
+    "2-compartment, KLT frozen at its resting conductance": ("two", 3),
+    "2-compartment, KLT replaced by its slope conductance": ("two", 1),
+}
 # --quick: a smoke test with coarse grids, short trains and loose tolerances
 QUICK_ARMS = (
     "45-compartment (msoAxon.m)",
@@ -192,8 +203,14 @@ def plot(results: dict[str, Any], path: pathlib.Path) -> None:
     for ax, (key, ykey, ylabel, xlabel) in zip(axes, panels, strict=True):
         for name, r in results.items():
             d = r[key]
-            ax.plot(d["freqs"], d[ykey], ".-", label=name)
-        ax.axvline(TARGETS[key], color="k", ls=":", lw=1)
+            ax.plot(
+                d["freqs"],
+                d[ykey],
+                marker=".",
+                label=name,
+                **plotting.model_style(*ARM_STYLES[name]),
+            )
+        ax.axvline(TARGETS[key], color=plotting.GREY, ls=":", lw=1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         if key != "subthreshold":

@@ -221,7 +221,7 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     a1 = fig.add_subplot(gs[:, 0])
     a2 = fig.add_subplot(gs[0, 1])
     strip = fig.add_subplot(gs[1, 1], sharex=a2)
-    colours = ["#1f5fa8", "#d2691e", "#2e8b57"]
+    colours = [plotting.COLOURS[k] for k in ("multi", "two", "goldwyn")]
     plotting.threshold_ratio_panel(
         a1,
         delays,
@@ -257,8 +257,10 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
         fmt="o-",
         color=colours[1],
         capsize=2,
-        label=f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us;\n"
-        f"{a.trials} trials per delay, 95% Wilson interval)",
+        label=plotting.glyphs(
+            f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us;\n"
+            f"{a.trials} trials per delay, 95% Wilson interval)"
+        ),
     )
     for ax in (a2, strip):
         ax.axvspan(
@@ -266,7 +268,7 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
             MYOGA_US / 2,
             color="0.85",
             zorder=0,
-            label=f"Myoga 2014 in vitro: {MYOGA_US} us",
+            label=plotting.glyphs(f"Myoga 2014 in vitro: {MYOGA_US} us"),
         )
     a2.set(
         xlim=(-320, 320),

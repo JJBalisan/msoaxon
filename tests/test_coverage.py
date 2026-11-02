@@ -634,3 +634,82 @@ def test_threshold_resolution(stim, jpg_grid, expected):
         str(REPO / "scripts" / "making_threshold_graphs.py")
     )
     assert script["resolution"](stim, jpg_grid) == expected
+
+
+def test_model_colours_are_distinct_and_colour_blind_safe():
+    colours = list(plotting.COLOURS.values())
+    assert len(set(colours)) == len(colours)
+    # the Okabe-Ito entries the scripts share (#138)
+    assert plotting.COLOURS == {
+        "multi": "#0072B2",
+        "two": "#D55E00",
+        "goldwyn": "#009E73",
+    }
+    assert plotting.GREY not in colours and plotting.SOMA not in colours
+    assert plotting.model_style("two", 1) == {"color": "#D55E00", "ls": "--"}
+
+
+def test_sequential_is_ordered_and_stable():
+    lum = [
+        0.299 * r + 0.587 * g + 0.114 * b
+        for r, g, b, _ in plotting.sequential([1.5, 2.0, 3.0])
+    ]
+    assert lum == sorted(lum)  # dark to light along the parameter
+    # a quick run's subset keeps the full run's colours
+    full = plotting.sequential([1.5, 2.0, 3.0])
+    assert plotting.sequential([1.5, 3.0], 1.5, 3.0) == [full[0], full[2]]
+
+
+def test_glyphs():
+    assert plotting.glyphs("FWHM 200 us; distal (180 um), 10 MOhm") == (
+        "FWHM 200 \N{MICRO SIGN}s; distal (180 \N{MICRO SIGN}m), "
+        "10 M\N{GREEK CAPITAL LETTER OMEGA}"
+    )
+    assert plotting.glyphs("bus stop") == "bus stop"
+
+
+def test_graphing_colours_follow_the_models(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "Multigraph"}, *data)
+    top, two3, two5, inp = fig.axes
+    colours = [mpl.colors.to_hex(line.get_color()) for line in top.lines]
+    assert colours[0] == "#000000"  # the soma
+    assert len(set(colours)) == 9  # nine distinct, ordered node colours
+    assert colours[1:] == [
+        mpl.colors.to_hex(c)
+        for c in plotting.sequential([3, 5, 9, 13, 21, 29, 37, 45])
+    ]
+    for ax in (two3, two5):
+        assert [line.get_color() for line in ax.lines] == [
+            plotting.SOMA,
+            plotting.COLOURS["two"],
+        ]
+    assert inp.lines[0].get_color() == plotting.GREY
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing({**graph, "Type": "NodeComparison"}, *data)
+    for ax in fig.axes:
+        assert [line.get_color() for line in ax.lines] == [
+            plotting.COLOURS["multi"],
+            plotting.COLOURS["two"],
+        ]
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_colours_and_units():
+    fig = plotting.threshold_figure(
+        [1, 2], [48, 50], [48, 51], "EPSGpair", "x", unit="nS per EPSG"
+    )
+    ax = fig.axes[0]
+    assert [line.get_color() for line in ax.lines] == [
+        plotting.COLOURS["multi"],
+        plotting.COLOURS["two"],
+    ]
+    assert ax.get_ylabel() == "Threshold (nS per EPSG)"
+    mpl.pyplot.close(fig)
+
+
+def test_resonance_arms_use_their_model_colour():
+    script = runpy.run_path(str(REPO / "scripts" / "resonance.py"))
+    assert set(script["ARM_STYLES"]) == set(script["ARMS"])
+    for name, (model, _) in script["ARM_STYLES"].items():
+        assert script["ARMS"][name][0] == model  # never another model's

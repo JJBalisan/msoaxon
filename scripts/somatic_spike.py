@@ -74,13 +74,26 @@ def main() -> None:
                 }
             )
             keep = t >= 4.8
-            ax.plot(t[keep], x[keep, 0], label=f"{k}x: {r['amplitude']:.1f} mV")
+            # one sequential map over MULTS: the same multiple is the same
+            # colour in every panel, and in a quick run
+            (colour,) = plotting.sequential([k], min(MULTS), max(MULTS))
+            ax.plot(
+                t[keep],
+                x[keep, 0],
+                color=colour,
+                label=f"{k}x: {r['amplitude']:.1f} mV",
+            )
             ax.plot(r["t_inflection"], r["v_inflection"], "k.", ms=5)
         results[name] = {"rheobase_pA": float(rb), "spikes": rows}
         # wrapped: three long titles side by side on a 7 in figure
         ax.set_title(f"{textwrap.fill(name, 30)}\nrheobase {rb:.0f} pA")
         ax.set_xlabel("Time (ms)")
-        ax.legend(title="amplitude from inflection (dot)")
+        # below the panel: the spike and its dot fill the panel's corners
+        ax.legend(
+            title="rheobase multiple: amplitude\nfrom the inflection (dot)",
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.22),
+        )
         print(
             f"{name}: rheobase {rb:.0f} pA; "
             + ", ".join(
