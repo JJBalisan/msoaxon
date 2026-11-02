@@ -57,7 +57,7 @@ Code that isn't a port of a MATLAB file:
 | `msoaxon/measure.py` | input resistance and time constant from a current step; soma trace on a grid |
 | `msoaxon/resonance.py` | soma impedance, sine-train and EPSG-train thresholds over frequency (#83) |
 | `msoaxon/_fast.py` | the optional Rust right-hand side: mode selection, self-check, `DriftWarning` |
-| `rust/` | the `msoaxon-fast` extension (PyO3, built by maturin): `multi._rhs` in Rust |
+| `rust/` | the `msoaxon-fast` extension (PyO3, built by maturin): `multi._rhs` and `two._rhs` in Rust |
 
 ## Fast mode: the 45-compartment right-hand side in Rust
 
@@ -111,8 +111,11 @@ name twice, so a re-run of a published tag fails at the upload.
 `mso_axon(..., mode=...)` picks the right-hand side; `_dispatch.run_model`
 passes `mode` on, so it also works in `model_kw`
 (`coincidence.threshold("multi", 0.1, model_kw={"mode": "exact"})`) and
-`measure.passive_step(..., mode=...)`. The two-compartment model has only its
-numpy path and ignores it.
+`measure.passive_step(..., mode=...)`. `two_cpt(..., mode=...)` takes the same
+modes (#108): `two._rhs` is ported too (`rust/src/two.rs`), and the table below
+holds for it with `two._rhs` in place of `multi._rhs`, except the default: with
+no `mode` and no `MSOAXON_MODE`, `two_cpt` runs `"exact"` (see "The
+two-compartment model" under "Native mode" for why).
 
 | `mode` | Right-hand side |
 |---|---|
@@ -149,6 +152,16 @@ ported: every stimulus (Synaptic, SynapticPair and Events included), the
 lumped chain and `with_dendrites()` trees, `membrane()` overrides and every model type, so
 `mode="fast"` never falls back to `"exact"` for a configuration.
 
+`two._rhs` is ported the same way, every stimulus and every `get_params` knob.
+The quirks `TwoCpt.m` settles in its parameters (`'Active-sodium'`, the frozen
+KLT inactivation `z`) reach Rust as the resolved values, and `TwoCptODE.m`'s
+soma driving force for input into the axon is kept in the equations. Since
+`two._rhs` runs on numpy scalars, two of numpy's scalar paths are reproduced:
+`x ** 2` is libm `pow` (numpy's arrays use `x * x`; they differ in the last bit
+now and then), and `i[soma].sum()` is numpy's pairwise sum. Whole fast runs are
+bit-identical to `"exact"` on darwin-arm64 here too. The self-check behind the
+first DriftWarning still samples the 45-compartment port only.
+
 **Speed** (Apple M1 Max, Python 3.12, best of 3; the machine was busy, so read
 the ratios rather than the seconds):
 
@@ -163,8 +176,8 @@ the ratios rather than the seconds):
 Every value above came out identical in both modes, and `benchmark_search.py
 --check` reported the same values, run counts and 0 mismatches in each. The rest
 of a run is scipy's own Python (step control, the sparse finite-difference
-Jacobian, LU), which caps the gain near 3×; the two-compartment model is
-unchanged.
+Jacobian, LU), which caps the gain near 3×; these numbers predate the
+two-compartment port (#108, timings under "Native mode").
 
 `tests/test_fast.py` compares the two right-hand sides on sampled states across
 every covered configuration (to 1e-12 relative, and bit for bit on
@@ -223,8 +236,10 @@ occurs on the golden cases or the benchmark).
 **max_step.** diffsol has no step cap, so `max_step` is emulated: before every
 step the controller's growth bounds are narrowed so that no step is proposed
 past the cap, and should one still be longer the integrator's stop time is
-moved to one `max_step` ahead. Only the step length is bounded; the tolerances
-are never changed.
+moved to one `max_step` ahead. That includes a segment's first step, whose
+length diffsol's initial-step heuristic picks (from a state at rest, such as
+`two_cpt`'s exact one, it can propose one longer than the cap). Only the step
+length is bounded; the tolerances are never changed.
 
 **Events.** `spike_event` and `settled_event` carry a `spec` the native segment
 reads; Rust evaluates the same functions as root functions, stops on a rising
@@ -237,6 +252,39 @@ integrated to `t_end`: the same answer, an earlier stop.
 `"Events"` runs under native like every other stimulus: its event table goes
 to Rust whole and each event is evaluated at its own compartment, so the
 Jacobian pattern above is unchanged.
+
+**The two-compartment model** (#108) runs under the same integrator
+(`integrate::Model`, implemented by `MultiRhs` and `TwoCptRhs`): its 11 states
+have an analytic Jacobian on a fixed pattern (`two::jac_sparsity`; both
+voltages couple, since an input into the axon is driven by the soma voltage)
+and the Newton matrix goes to faer's sparse LU, the tree solver's shape being
+the 45-compartment model's. `two_cpt` integrates at `TwoCpt.m`'s
+`RTOL = ATOL = 1e-6`, not 1e-8, so native and exact agree less closely than for
+the 45-compartment model: every two-compartment golden trace passes in fast and
+native, but at 151 interpolated samples three axonal-input runs
+(`tests/test_fast.py`, `TWO_DRIFT`) exceed rtol 1e-4 / atol 5e-3 mV by up to
+2.3× (0.0125 mV) at one point on an upstroke, and a spike stop lands 4.6e-6 ms
+from scipy's. Against a run at rtol 1e-10 each mode is off by the same order at
+its own steps (0.0015 to 0.0044 mV). Run as the default, native also moved four
+pinned results outside their tests' tolerances (the Goldwyn passive `tau`,
+0.3341 against 0.34 +/- 0.005; a sine `BinarySearch.m` point, 11544.8 against
+11541.1 +/- 2.3 pA; a passive-step peak, 4.8702 against 4.8758 at rtol 1e-3;
+a somatic spike-table point, 12.93 against 13 +/- 0.06), so `two_cpt`'s default
+stays `"exact"` until that is decided.
+
+Speed of the 20 searches of `scripts/benchmark_search.py` (one pass at rel_tol
+1e-4, the reference not recomputed; Apple M1 Max, Python 3.13; two repeats
+agreed to 0.1 s):
+
+| | 2-CPT runs (127) | 45-CPT runs (173) | all searches |
+|---|---|---|---|
+| default (45-CPT native, 2-CPT exact) | 2.68 s | 1.09 s | 3.78 s |
+| `MSOAXON_MODE=native` | 0.05 s | 1.08 s | 1.13 s |
+| `MSOAXON_MODE=fast` | 1.73 s | 11.94 s | 13.67 s |
+| `MSOAXON_MODE=exact` | 2.62 s | 29.17 s | 31.79 s |
+
+With the 45-compartment model native, the two-compartment runs were 71% of
+the search time; native takes them from 2.68 s to 0.05 s.
 
 ## Port contract
 

@@ -6,6 +6,33 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+### Added
+
+- `two_cpt(..., mode=...)`: the two-compartment model gets the Rust
+  right-hand side (`rust/src/two.rs`, `msoaxon_fast.TwoCptRhs`) and the
+  native integrator, with the modes of `mso_axon`; `_dispatch.run_model`
+  passes `mode` to both models. Its default stays `"exact"` (unless
+  `MSOAXON_MODE` says otherwise): native runs move some pinned
+  two-compartment results past their tests' tolerances. Fast runs are
+  bit-identical to `"exact"` on darwin-arm64; the mode is part of
+  `two_cpt`'s quiet-prefix key (#108).
+
+### Changed
+
+- `rust/src/integrate.rs` runs over a `Model` trait (`MultiRhs` with the
+  tree solver, `TwoCptRhs` with faer's sparse LU) (#108).
+- `tests/test_golden.py` passes `mode` to the two-compartment cases too, so
+  their `"exact"` runs stay exact under any `MSOAXON_MODE` (#108).
+
+### Fixed
+
+- Native mode capped every step at `max_step` except possibly the first of
+  a segment: diffsol's initial-step heuristic can propose a longer one from
+  a state at rest. The first stop time now follows the step it chose. No
+  golden trace moved (#108).
+
 ## 1.9.0 (29 Oct 2026)
 
 `rebalance_rest=True` no longer builds a cell that fires on its own (#128):

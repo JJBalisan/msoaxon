@@ -800,9 +800,13 @@ def two_cpt(
         axon_na_vhalf: The same for the axon compartment.
         klt_to_leak: None (default) keeps KLT; "chord" or "slope"
             replaces it by a leak, as above.
-        mode: "exact", "fast", "native" or None, as in mso_axon: _rhs
-            (the reference), its Rust port under scipy's BDF, or the port
-            under the Rust BDF integrator. See _fast.
+        mode: "exact", "fast" or "native", as in mso_axon: _rhs (the
+            reference), its Rust port under scipy's BDF, or the port
+            under the Rust BDF integrator. None (default): MSOAXON_MODE
+            if set, else "exact", unlike mso_axon, whose default is
+            "native" with the extension: two_cpt's native runs move some
+            pinned results past their tests' tolerances (#108). See
+            _fast.
 
     Returns:
         (t, x) with x shaped (n_times, 11); see the module docstring for
@@ -851,6 +855,8 @@ def two_cpt(
     if stim_type == "Events":
         start, stop = s.start, s.stop  # the first and last onset
     x0 = initial_state(P)
+    if _fast.requested(mode) is None:
+        mode = "exact"  # not the extension's default "native" (#108)
     mode = _fast.resolve(mode)
     if mode in ("fast", "native"):
         build = _fast.build_two if mode == "fast" else _fast.build_two_native

@@ -602,15 +602,25 @@ def test_run_model_passes_mode_to_both_models(fake_ext):
     assert fake_ext == [("fast", "EPSGpair"), ("fast", "none")]
     _dispatch.run_model("multi", *args, mode="exact")
     _dispatch.run_model("two", *args, mode="exact")
+    _dispatch.run_model("two", *args)  # two_cpt's default stays exact
     assert len(fake_ext) == 2
     _dispatch.run_model("two", *args, mode="fast")
-    _dispatch.run_model("two", *args)  # the default: native
+    _dispatch.run_model("two", *args, mode="native")
     assert fake_ext[2:] == [
         ("two fast", "EPSGpair"),
         ("two fast", "none"),
         ("two native", "EPSGpair"),
         ("two native", "none"),
     ]
+
+
+def test_two_cpt_default_is_exact_unless_the_env_asks(fake_ext, monkeypatch):
+    args = ("EPSGpair", 5, 5.1, 30, 3, "active-full", 8, -68.0, 1)
+    two.two_cpt(*args)
+    assert fake_ext == []
+    monkeypatch.setenv(_fast.MODE_ENV, "native")
+    two.two_cpt(*args)
+    assert fake_ext == [("two native", "EPSGpair"), ("two native", "none")]
 
 
 def test_pool_workers_inherit_the_mode_env(monkeypatch, no_env):
