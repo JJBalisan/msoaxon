@@ -6,6 +6,14 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+### Changed
+
+- The configuration in `FiresWithoutInputError` and `spike_height`
+  messages names `klt_to_leak` in `mem=membrane(...)`, read from the
+  morphology's key where the setting lives; no result changes (#129).
+
 ## 1.9.0 (29 Oct 2026)
 
 `rebalance_rest=True` no longer builds a cell that fires on its own (#128):
