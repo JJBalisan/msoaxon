@@ -11,6 +11,7 @@ main process needs matplotlib.
 """
 
 import pathlib
+import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -28,6 +29,22 @@ WIDTHS = {"single": 3.4, "double": 7.0}
 # units as the scripts spell them in ASCII, and the glyphs a figure shows
 _GLYPHS = {"us": "\N{MICRO SIGN}s", "MOhm": "M\N{GREEK CAPITAL LETTER OMEGA}"}
 _FORMATS = (".png", ".pdf", ".svg")
+# One colour per model, colour-blind safe (Okabe-Ito), the same in every
+# figure. A variant of a model (KLT replaced or blocked, rest rebalanced,
+# dendrites added) keeps its model's colour and takes a line style from
+# VARIANT_STYLES; it never borrows another model's colour.
+COLOURS = {
+    "multi": "#0072B2",  # 45-compartment (msoAxon.m)
+    "two": "#D55E00",  # 2-compartment (TwoCpt.m)
+    "goldwyn": "#009E73",  # 2-compartment recalibrated to Goldwyn 2019
+}
+VARIANT_STYLES = ("-", "--", ":", "-.")
+GREY = "#666666"  # references and inputs, which are no model
+SOMA = "k"  # the soma, against a model's axon compartments
+# an ordered parameter: one sequential map, without viridis' palest yellow,
+# which vanishes on white
+SEQUENTIAL = "viridis"
+_SEQUENTIAL_SPAN = (0.0, 0.85)
 
 
 def use_style() -> None:
@@ -104,6 +121,65 @@ def units(label: str, unit: str) -> str:
     return f"{label} ({_GLYPHS.get(unit, unit)})"
 
 
+def model_style(model: str, variant: int = 0) -> dict[str, str]:
+    """Returns a model's colour and a line style for one of its variants.
+
+    Args:
+        model: A key of COLOURS ("multi", "two" or "goldwyn").
+        variant: 0 for the model itself, 1 to 3 for its variants (dashed,
+            dotted, dash-dotted).
+
+    Returns:
+        dict(color=..., ls=...), keywords for ax.plot.
+    """
+    return {"color": COLOURS[model], "ls": VARIANT_STYLES[variant]}
+
+
+def sequential(
+    values: np.ndarray | Sequence[float],
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> list[tuple[float, float, float, float]]:
+    """Returns colours for an ordered parameter from one sequential map.
+
+    The same value gets the same colour whenever vmin and vmax are the
+    same, so a quick run (a subset of the values) matches a full one.
+
+    Args:
+        values: The parameter's values (rheobase multiple, node number,
+            distance from the soma).
+        vmin: The value drawn darkest (default: the smallest).
+        vmax: The value drawn lightest (default: the largest).
+
+    Returns:
+        One RGBA colour per value.
+    """
+    v = np.asarray(values, dtype=float)
+    lo = v.min() if vmin is None else vmin
+    hi = v.max() if vmax is None else vmax
+    frac = (v - lo) / (hi - lo) if hi > lo else np.zeros_like(v)
+    a, b = _SEQUENTIAL_SPAN
+    cmap = matplotlib.colormaps[SEQUENTIAL]
+    return [tuple(cmap(a + (b - a) * f)) for f in frac]
+
+
+def glyphs(text: str) -> str:
+    """Writes the units the scripts spell in ASCII with their glyphs.
+
+    "us" and "um" after a number become "\N{MICRO SIGN}s" and
+    "\N{MICRO SIGN}m", and "MOhm" becomes "M\N{GREEK CAPITAL LETTER OMEGA}",
+    for legend and title text built from the scripts' ASCII names.
+
+    Args:
+        text: The text.
+
+    Returns:
+        The text with the glyphs.
+    """
+    text = re.sub(r"(?<=\d )u([sm])\b", "\N{MICRO SIGN}\\1", text)
+    return text.replace("MOhm", _GLYPHS["MOhm"])
+
+
 def panel_label(ax: matplotlib.axes.Axes, letter: str) -> None:
     """Writes a bold panel letter just above an axes' top-left corner.
 
@@ -164,8 +240,10 @@ def _panel(
     labels: list[str],
     t_end: float,
     ylabel: str = "Voltage (mV)",
+    colours: Sequence[Any] = (),
 ) -> None:
-    ax.plot(t, V)
+    for line, colour in zip(ax.plot(t, V), colours, strict=False):
+        line.set_color(colour)
     ax.set_title(title)
     if labels:
         ax.legend(labels)
@@ -406,8 +484,17 @@ def graphing(
             "multi-compartment",
             ["Soma", f"node {node}"],
             t_end,
+            colours=(SOMA, COLOURS["multi"]),
         )
-        _panel(a2, t2, x[:, :2], "two-compartment", ["Soma", "node"], t_end)
+        _panel(
+            a2,
+            t2,
+            x[:, :2],
+            "two-compartment",
+            ["Soma", "node"],
+            t_end,
+            colours=(SOMA, COLOURS["two"]),
+        )
         fig.suptitle("Comparison of 2 Compartment and Multi-Compartment Models")
 
     elif kind == "ModelComparison2":
@@ -419,6 +506,7 @@ def graphing(
             "Two-Compartment (Node 3)",
             ["Soma", "node"],
             t_end,
+            colours=(SOMA, COLOURS["two"]),
         )
         _panel(
             a2,
@@ -427,16 +515,25 @@ def graphing(
             "Two-Compartment (Node 5)",
             ["Soma", "node"],
             t_end,
+            colours=(SOMA, COLOURS["two"]),
         )
         fig.suptitle("Comparison of 2 Compartment Models")
 
     elif kind == "NodeComparison":
         a1, a2 = fig.subplots(2, 1)
         labels = ["Multi-Compartment", "2 Compartment"]
-        a1.plot(t1, y[:, 0])
-        _panel(a1, t2, x[:, 0], "Soma", labels, t_end)
-        a2.plot(t1, y[:, node - 1])
-        _panel(a2, t2, x[:, 1], f"node {node}", labels, t_end)
+        a1.plot(t1, y[:, 0], color=COLOURS["multi"])
+        _panel(a1, t2, x[:, 0], "Soma", labels, t_end, colours=[COLOURS["two"]])
+        a2.plot(t1, y[:, node - 1], color=COLOURS["multi"])
+        _panel(
+            a2,
+            t2,
+            x[:, 1],
+            f"node {node}",
+            labels,
+            t_end,
+            colours=[COLOURS["two"]],
+        )
         fig.suptitle(f"Comparison of Soma and node {node}")
 
     elif kind == "MultiCompartment":
@@ -447,6 +544,7 @@ def graphing(
             f"Multi-compartment model, node: {node}",
             ["Soma", f"node {node}"],
             t_end,
+            colours=(SOMA, COLOURS["multi"]),
         )
 
     elif kind == "TwoCompartment":
@@ -457,6 +555,7 @@ def graphing(
             "two-compartment",
             ["Soma", "node"],
             t_end,
+            colours=(SOMA, COLOURS["two"]),
         )
 
     elif kind == "Input":
@@ -468,18 +567,28 @@ def graphing(
             [],
             t_end,
             ylabel="Current (pA)",
+            colours=[GREY],
         )
 
     elif kind == "Multigraph":
         gs = fig.add_gridspec(2, 3)
         cols = [1, 3, 5, 9, 13, 21, 29, 37, 45]
+        top = fig.add_subplot(gs[0, :])
+        # the nodes are a spatial series: one sequential map, darkest
+        # nearest the soma, which is black
         _panel(
-            fig.add_subplot(gs[0, :]),
+            top,
             t1,
             y[:, [c - 1 for c in cols]],
             "multi-compartment",
             ["Soma"] + [f"node {c}" for c in cols[1:]],
             t_end,
+            colours=[SOMA, *sequential(cols[1:])],
+        )
+        top.legend(
+            ["Soma"] + [f"node {c}" for c in cols[1:]],
+            loc="center left",
+            bbox_to_anchor=(1.0, 0.5),
         )
         _panel(
             fig.add_subplot(gs[1, 0]),
@@ -488,6 +597,7 @@ def graphing(
             "Two-Compartment (Node 3)",
             ["Soma", "node"],
             t_end,
+            colours=(SOMA, COLOURS["two"]),
         )
         _panel(
             fig.add_subplot(gs[1, 1]),
@@ -496,6 +606,7 @@ def graphing(
             "Two-Compartment (Node 5)",
             ["Soma", "node"],
             t_end,
+            colours=(SOMA, COLOURS["two"]),
         )
         _panel(
             fig.add_subplot(gs[1, 2]),
@@ -505,6 +616,7 @@ def graphing(
             [],
             t_end,
             ylabel="Current (pA)",
+            colours=[GREY],
         )
         fig.suptitle(
             "Comparison of 2 Compartment and Multi-Compartment Models "
@@ -549,9 +661,21 @@ def threshold_figure(
     fig = figure("single", height=2.6)
     ax = fig.subplots()
     hit = plot_thresholds(
-        ax, x_values, multi, ceiling, label="Multi-Compartment"
+        ax,
+        x_values,
+        multi,
+        ceiling,
+        label="Multi-Compartment",
+        color=COLOURS["multi"],
     )
-    hit |= plot_thresholds(ax, x_values, two, ceiling, label="Two-Compartment")
+    hit |= plot_thresholds(
+        ax,
+        x_values,
+        two,
+        ceiling,
+        label="Two-Compartment",
+        color=COLOURS["two"],
+    )
     if hit.any():
         ax.axhline(
             ceiling,
@@ -562,6 +686,10 @@ def threshold_figure(
         )
     if resolution is not None:
         title = f"{title}\n(search resolution {resolution:g} {unit})"
-    ax.set(title=title, xlabel=xlabel, ylabel="Threshold")
+    ax.set(
+        title=title,
+        xlabel=xlabel,
+        ylabel=units("Threshold", unit) if unit else "Threshold",
+    )
     ax.legend()
     return fig

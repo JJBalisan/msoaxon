@@ -24,6 +24,16 @@ same version as the package, bumped in the same release PR.
   7.0 in wide (3.4 in for a threshold panel), at 300 dpi, with a PDF beside
   each PNG. `coincidence_window.py` panel A and `dendrites.py` panel E share
   one function. Display only; no computed number changes (#137).
+- One colour per model in every figure, colour-blind safe (Okabe-Ito,
+  `plotting.COLOURS`: 45-compartment `#0072B2`, TwoCpt.m `#D55E00`,
+  Goldwyn 2019 `#009E73`); a model's variants (KLT replaced, frozen or
+  removed, rest rebalanced, dendritic) keep its colour and differ by line
+  style (`plotting.model_style`). Ordered parameters (rheobase multiple,
+  Multigraph node, dendritic site, Goldwyn's coupling strengths) use one
+  sequential map (`plotting.sequential`), with the soma in black.
+  Legends that covered data moved below their panels; every axis names its
+  unit, with µs, µm and MΩ glyphs (`plotting.glyphs`), and EPSG
+  thresholds are in nS per EPSG. Display only (#138).
 
 ### Fixed
 

@@ -467,16 +467,19 @@ def plot(
             c="0.55",
             label="the 44 axon nodes' constants",
         )
+        # node 3 in black; Goldwyn's weak, forward and strong couplings are
+        # an ordered series, so one sequential map (no model colours here:
+        # the whole plane is the two-compartment model)
         for (name, (c12, c21)), colour, marker in zip(
             names.items(),
-            ("k", "tab:blue", "tab:green", "tab:red"),
+            ["k", *plotting.sequential([0, 1, 2])],
             ("D", "*", "*", "*"),
             strict=True,
         ):
             ax.scatter(
                 [c12],
                 [c21],
-                c=colour,
+                color=colour,
                 marker=marker,
                 s=60,
                 edgecolors="w",
@@ -488,7 +491,8 @@ def plot(
                 [located["couple12"]],
                 [located["couple21"]],
                 facecolors="none",
-                edgecolors="tab:orange",
+                edgecolors="k",
+                linestyles="--",
                 s=160,
                 linewidths=1.5,
                 zorder=6,
@@ -501,7 +505,13 @@ def plot(
         ax.set_title(title)
         fig.colorbar(sc, ax=ax)
     axes[0].set_ylabel("backward coupling couple21 (axon to soma)")
-    axes[0].legend(fontsize=6, loc="upper left", frameon=True)
+    # one legend for both panels, below them: inside, it covered the
+    # diagonal and the cells
+    fig.legend(
+        *axes[0].get_legend_handles_labels(),
+        loc="outside lower center",
+        ncol=3,
+    )
     fig.suptitle(
         "Two-compartment model over Goldwyn et al 2019's coupling plane\n"
         "(node 3's area ratio, channels and axonal Na)"

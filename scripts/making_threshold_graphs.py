@@ -21,10 +21,10 @@ from msoaxon import threshold
 # stimType: (n_points, factor, max, title, xlabel); x-values come from
 # threshold.sweep_x
 SWEEPS = {
-    "ramp": (15, 30, 15000, "Ramp", "Stop Value"),
-    "sine": (12, 30, 15000, "Sine", "Frequency"),
-    "ramp2": (15, 30, 15000, "Ramp2", "Stop Value"),
-    "EPSGpair": (25, 10, 150, "EPSGpair", "Time Difference"),
+    "ramp": (15, 30, 15000, "Ramp", "Ramp stop (ms)"),
+    "sine": (12, 30, 15000, "Sine", "Frequency (Hz)"),
+    "ramp2": (15, 30, 15000, "Ramp2", "Ramp stop (ms)"),
+    "EPSGpair": (25, 10, 150, "EPSGpair", "Delay between EPSGs (ms)"),
 }
 
 
@@ -162,7 +162,7 @@ def run(
             xlabel,
             ceiling=max_I,
             resolution=resolution(stim, a.jpg_grid),
-            unit="nS" if stim == "EPSGpair" else "pA",
+            unit="nS per EPSG" if stim == "EPSGpair" else "pA",
         )
         if a.out_dir:
             pathlib.Path(a.out_dir).mkdir(parents=True, exist_ok=True)

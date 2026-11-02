@@ -363,9 +363,32 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
     plotting.agg()
     fig = plotting.figure("double", height=4.0)
     ax = fig.subplots(1, 3)
+    # lumped in the 45-compartment colour; the dendritic sites (a variant,
+    # dashed) in one sequential map by distance from the soma; dendritic KLT
+    # removed in grey
+    sites = dict(
+        zip(
+            (
+                "dendritic, EPSG at soma",
+                "dendritic, EPSG mid-dendrite (100 um)",
+                "dendritic, EPSG distal (180 um)",
+            ),
+            plotting.sequential([0, 100, 180], vmax=200),
+            strict=True,
+        )
+    )
     for label, (g, v) in traces.items():
+        if label in sites:
+            style = {"color": sites[label], "ls": "--"}
+        elif label.startswith("lumped"):
+            style = plotting.model_style("multi")
+        else:
+            style = {"color": plotting.GREY, "ls": ":"}
         ax[0].plot(
-            g - 5, v / v.max(), label=f"{label} ({B[label]['amp']:.1f} mV)"
+            g - 5,
+            v / v.max(),
+            label=plotting.glyphs(f"{label} ({B[label]['amp']:.1f} mV)"),
+            **style,
         )
     ax[0].set(
         xlim=(-0.1, 2.5),
@@ -383,20 +406,32 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
             (
                 th,
                 {
-                    "label": f"bilateral dendritic, {kname}: "
-                    f"{E[kname]['margin_0.03']:.0f} us"
+                    "label": plotting.glyphs(
+                        f"bilateral dendritic, {kname}: "
+                        f"{E[kname]['margin_0.03']:.0f} us"
+                    ),
+                    # the kinetics as line style, as in coincidence_window
+                    "color": plotting.COLOURS["multi"],
+                    "ls": ls,
                 },
             )
-            for kname, th in curves.items()
+            for (kname, th), ls in zip(curves.items(), ("-", "--"), strict=True)
         ],
     )
-    ax[1].set_title(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
+    ax[1].set_title(
+        plotting.glyphs(f"Window at 3% margin\n(Myoga 2014: {MYOGA_US} us)")
+    )
     ax[1].legend(**below)
     for k, th in F.items():
-        ax[2].plot(fd * 1e3, th, ls="-" if k == "lumped" else "--", label=k)
+        ax[2].plot(
+            fd * 1e3,
+            th,
+            label=k,
+            **plotting.model_style("multi", 0 if k == "lumped" else 1),
+        )
     ax[2].set(
         xlabel=plotting.units("Delay between EPSGs", "us"),
-        ylabel="Threshold (EPSG units)",
+        ylabel=plotting.units("Threshold", "nS per EPSG"),
         title="EPSG pair at the soma:\nlumped vs dendritic",
     )
     ax[2].legend()
