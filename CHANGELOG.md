@@ -84,6 +84,19 @@ or return a meaningless result, and the golden traces are bit-identical.
   figures, and the two-compartment curve is dashed so the
   45-compartment curve shows where they agree. Same thresholds, same
   search (#140).
+- Trace figures show the event and the compared values (#141):
+  `plotting.graphing` draws a few ms around the first trace to rise 10 mV
+  (`plotting.event_window`; `window=None` or `combine_all.py --full` for the
+  whole run, `--window T0 T1` for any), shares the y axis between panels
+  that compare voltages, draws the soma thin on top, titles every panel
+  the same way, gives Multigraph a colour bar for node order, and draws
+  `Contour` as a compartment-by-time heat map. `somatic_spike.png` aligns
+  each trace at its inflection point, brackets the amplitude, and draws
+  Scott et al 2005's values as a band or lines. `resonance.png` marks
+  each model's resonances, with their offsets from Mikiel-Hunter et al
+  2016 in the legend, and labels its log axes with plain numbers
+  (`plotting.plain_log_ticks`). `dendrites.png` panel E marks each
+  curve's 3% half-width and half Myoga's 221 µs window. Display only.
 
 ### Fixed
 

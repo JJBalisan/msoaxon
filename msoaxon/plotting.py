@@ -24,8 +24,11 @@ from typing import Any
 
 import matplotlib as mpl
 import matplotlib.axes
+import matplotlib.cm
+import matplotlib.colors
 import matplotlib.figure
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 import numpy as np
 
 from msoaxon import _common, _fast, two
@@ -300,6 +303,17 @@ def glyphs(text: str) -> str:
     return text.replace("MOhm", _GLYPHS["MOhm"])
 
 
+def plain_log_ticks(ax: matplotlib.axes.Axes) -> None:
+    """Labels a log y axis with plain numbers (6000, not 6 x 10^3).
+
+    Args:
+        ax: A panel with a log y axis.
+    """
+    plain = matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}")
+    ax.yaxis.set_major_formatter(plain)
+    ax.yaxis.set_minor_formatter(plain)
+
+
 def panel_label(ax: matplotlib.axes.Axes, letter: str) -> None:
     """Writes a bold panel letter just above an axes' top-left corner.
 
@@ -358,18 +372,50 @@ def _panel(
     V: np.ndarray,
     title: str,
     labels: list[str],
-    t_end: float,
+    window: tuple[float, float],
     ylabel: str = "Voltage (mV)",
     colours: Sequence[Any] = (),
 ) -> None:
-    for line, colour in zip(ax.plot(t, V), colours, strict=False):
+    lines = ax.plot(t, V)
+    for line, colour in zip(lines, colours, strict=False):
         line.set_color(colour)
+    if colours and colours[0] == SOMA and len(lines) > 1:
+        # the soma thin and on top: the axon trace would hide it
+        lines[0].set(zorder=3, lw=0.9)
     ax.set_title(title)
     if labels:
         ax.legend(labels)
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel(ylabel)
-    ax.set_xlim(0, t_end)
+    ax.set_xlim(*window)
+
+
+# an event figure shows EVENT_SPAN around the first time a trace rises
+# EVENT_RISE above where it started
+EVENT_RISE = 10.0  # [mV]
+EVENT_SPAN = (1.0, 4.0)  # before and after the crossing [ms]
+
+
+def event_window(
+    t: np.ndarray, V: np.ndarray, t_end: float, start: float = 0.0
+) -> tuple[float, float]:
+    """Returns the time window around a run's event.
+
+    Args:
+        t: Times [ms].
+        V: Voltages, one column per trace [mV].
+        t_end: The run's end [ms].
+        start: Where the window centres when no trace rises EVENT_RISE
+            (the stimulus onset).
+
+    Returns:
+        (t0, t1): EVENT_SPAN around the first crossing, within the run.
+    """
+    t = np.asarray(t, dtype=float)
+    V = np.asarray(V, dtype=float).reshape(len(t), -1)
+    hit = np.nonzero(((V - V[0]) >= EVENT_RISE).any(axis=1))[0]
+    tc = float(t[hit[0]]) if hit.size else float(start)
+    return max(0.0, tc - EVENT_SPAN[0]), min(float(t_end), tc + EVENT_SPAN[1])
 
 
 def ceiling_mask(
@@ -543,6 +589,133 @@ def input_trace(
     )
 
 
+def graph_window(
+    graph: dict[str, Any],
+    t1: np.ndarray,
+    y: np.ndarray,
+    t2: np.ndarray | None,
+    x: np.ndarray | None,
+    window: str | Sequence[float] | None,
+) -> tuple[float, float]:
+    """Resolves graphing()'s window argument to (t0, t1) [ms].
+
+    Args:
+        graph: The graph settings (Type, tEnd and start are used).
+        t1: Times of the multi-compartment run [ms].
+        y: Its state.
+        t2: Times of the two-compartment run [ms], or None.
+        x: Its state, or None.
+        window: "event", None (the whole run) or (t0, t1).
+
+    Returns:
+        (t0, t1) [ms].
+    """
+    kind, t_end = graph["Type"], graph["tEnd"]
+    if window is None:
+        return 0.0, float(t_end)
+    if isinstance(window, str):
+        if kind in ("ModelComparison2", "Input"):
+            ref_t, ref_v = t2, x[:, :2]
+        elif kind == "TwoCompartment":
+            ref_t, ref_v = t1, y[:, :2]
+        else:
+            ref_t, ref_v = t1, y[:, :45]
+        return event_window(ref_t, ref_v, t_end, graph.get("start", 0.0))
+    return float(window[0]), float(window[1])
+
+
+def _contour(
+    fig: matplotlib.figure.Figure,
+    t1: np.ndarray,
+    y: np.ndarray,
+    window: tuple[float, float],
+) -> None:
+    """Draws the Contour graph: a compartment-by-time heat map."""
+    ax = fig.add_subplot()
+    mesh = ax.pcolormesh(
+        t1,
+        np.arange(1, 46),
+        y[:, :45].T,
+        cmap=SEQUENTIAL,
+        shading="nearest",
+        rasterized=True,
+    )
+    fig.colorbar(mesh, ax=ax, label="Voltage (mV)")
+    ax.set(
+        title="45-compartment model: voltage along the cell",
+        xlabel="Time (ms)",
+        ylabel="Compartment (1 = soma)",
+        xlim=window,
+    )
+
+
+def _multigraph(
+    fig: matplotlib.figure.Figure,
+    graph: dict[str, Any],
+    runs: tuple[np.ndarray, ...],
+    window: tuple[float, float],
+) -> None:
+    """Draws the Multigraph graph (see graphing())."""
+    t1, y, t2, x, t3, z = runs
+    two_title = "2-compartment model, node {}"
+    gs = fig.add_gridspec(2, 3)
+    cols = [1, 3, 5, 9, 13, 21, 29, 37, 45]
+    top = fig.add_subplot(gs[0, :])
+    # the nodes are a spatial series: one sequential map, darkest
+    # nearest the soma, which is black; a colour bar gives the order
+    _panel(
+        top,
+        t1,
+        y[:, [c - 1 for c in cols]],
+        "45-compartment model, soma and axon nodes",
+        [],
+        window,
+        colours=[SOMA, *sequential(cols[1:])],
+    )
+    top.legend(top.lines[:1], ["Soma"], loc="upper right")
+    ramp = matplotlib.colors.ListedColormap(
+        sequential(np.linspace(cols[1], cols[-1], 256))
+    )
+    bar = fig.colorbar(
+        matplotlib.cm.ScalarMappable(
+            matplotlib.colors.Normalize(cols[1], cols[-1]), ramp
+        ),
+        ax=top,
+        label="Axon node",
+    )
+    bar.set_ticks(cols[1:])
+    b0 = fig.add_subplot(gs[1, 0], sharey=top)
+    _panel(
+        b0,
+        t2,
+        x[:, :2],
+        two_title.format(3),
+        ["Soma", "Node 3"],
+        window,
+        colours=(SOMA, COLOURS["two"]),
+    )
+    _panel(
+        fig.add_subplot(gs[1, 1], sharey=top),
+        t3,
+        z[:, :2],
+        two_title.format(5),
+        ["Soma", "Node 5"],
+        window,
+        colours=(SOMA, COLOURS["two"]),
+    )
+    _panel(
+        fig.add_subplot(gs[1, 2]),
+        t2,
+        input_trace(graph, t2, x),
+        "Input current",
+        [],
+        window,
+        ylabel="Current (pA)",
+        colours=[GREY],
+    )
+    fig.suptitle("45- vs 2-compartment model with the input")
+
+
 def graphing(
     graph: dict[str, Any],
     t1: np.ndarray,
@@ -551,6 +724,7 @@ def graphing(
     x: np.ndarray | None = None,
     t3: np.ndarray | None = None,
     z: np.ndarray | None = None,
+    window: str | Sequence[float] | None = "event",
 ) -> matplotlib.figure.Figure:
     """Draws graph["Type"] and returns the figure (Graphing.m).
 
@@ -565,6 +739,9 @@ def graphing(
                                          recomputed on it)
         Multigraph                       all six
 
+    Panels that compare voltages share their y axis. Contour is a
+    compartment-by-time heat map.
+
     Args:
         graph: The graph settings (see the module docstring).
         t1: Times of the multi-compartment run [ms].
@@ -574,6 +751,9 @@ def graphing(
         t3: Times of a second two-compartment run (node 5 in
             Combine_all.m).
         z: That run's state.
+        window: The time axis: "event" (default) for event_window()
+            around the first trace to rise, None for the whole run, or
+            (t0, t1) [ms].
 
     Returns:
         The matplotlib figure.
@@ -581,89 +761,87 @@ def graphing(
     Raises:
         ValueError: For an unknown graph Type.
     """
-    node, t_end, kind = graph["node"], graph["tEnd"], graph["Type"]
+    node, kind = graph["node"], graph["Type"]
+    if kind not in _GRAPH_TYPES:
+        raise ValueError(f"unknown graph Type {kind!r}")
+    window = graph_window(graph, t1, y, t2, x, window)
     fig = figure("double", height=5.5)
+    two_title = "2-compartment model, node {}"
 
     if kind == "Contour":
-        ax = fig.add_subplot(projection="3d")
-        X, Y = np.meshgrid(np.arange(1, 46), t1)
-        ax.plot_surface(X, Y, y[:, :45], cmap="viridis", linewidth=0)
-        ax.set(
-            title="Voltage Propagation",
-            xlabel="Compartment Number (1-45)",
-            ylabel="Time",
-            zlabel="Voltage (mV)",
-        )
+        _contour(fig, t1, y, window)
 
     elif kind == "ModelComparison":
-        a1, a2 = fig.subplots(2, 1)
+        a1, a2 = fig.subplots(2, 1, sharex=True, sharey=True)
         _panel(
             a1,
             t1,
             y[:, [0, node - 1]],
-            "multi-compartment",
-            ["Soma", f"node {node}"],
-            t_end,
+            "45-compartment model",
+            ["Soma", f"Node {node}"],
+            window,
             colours=(SOMA, COLOURS["multi"]),
         )
         _panel(
             a2,
             t2,
             x[:, :2],
-            "two-compartment",
-            ["Soma", "node"],
-            t_end,
+            two_title.format(node),
+            ["Soma", f"Node {node}"],
+            window,
             colours=(SOMA, COLOURS["two"]),
         )
-        fig.suptitle("Comparison of 2 Compartment and Multi-Compartment Models")
+        fig.suptitle(f"45- vs 2-compartment model, soma and node {node}")
 
     elif kind == "ModelComparison2":
-        a1, a2 = fig.subplots(2, 1)
+        a1, a2 = fig.subplots(2, 1, sharex=True, sharey=True)
         _panel(
             a1,
             t2,
             x[:, :2],
-            "Two-Compartment (Node 3)",
-            ["Soma", "node"],
-            t_end,
+            two_title.format(3),
+            ["Soma", "Node 3"],
+            window,
             colours=(SOMA, COLOURS["two"]),
         )
         _panel(
             a2,
             t3,
             z[:, :2],
-            "Two-Compartment (Node 5)",
-            ["Soma", "node"],
-            t_end,
+            two_title.format(5),
+            ["Soma", "Node 5"],
+            window,
             colours=(SOMA, COLOURS["two"]),
         )
-        fig.suptitle("Comparison of 2 Compartment Models")
+        fig.suptitle("2-compartment model at node 3 and node 5")
 
     elif kind == "NodeComparison":
-        a1, a2 = fig.subplots(2, 1)
-        labels = ["Multi-Compartment", "2 Compartment"]
+        a1, a2 = fig.subplots(2, 1, sharex=True, sharey=True)
+        labels = ["45-compartment", "2-compartment"]
         a1.plot(t1, y[:, 0], color=COLOURS["multi"])
-        _panel(a1, t2, x[:, 0], "Soma", labels, t_end, colours=[COLOURS["two"]])
+        _panel(
+            a1, t2, x[:, 0], "Soma", labels, window, colours=[COLOURS["two"]]
+        )
         a2.plot(t1, y[:, node - 1], color=COLOURS["multi"])
         _panel(
             a2,
             t2,
             x[:, 1],
-            f"node {node}",
+            f"Node {node}",
             labels,
-            t_end,
+            window,
             colours=[COLOURS["two"]],
         )
-        fig.suptitle(f"Comparison of Soma and node {node}")
+        fig.suptitle(f"45- vs 2-compartment model, soma and node {node}")
 
     elif kind == "MultiCompartment":
         _panel(
             fig.add_subplot(),
             t1,
             y[:, [0, node - 1]],
-            f"Multi-compartment model, node: {node}",
-            ["Soma", f"node {node}"],
-            t_end,
+            f"45-compartment model, node {node}",
+            ["Soma", f"Node {node}"],
+            window,
             colours=(SOMA, COLOURS["multi"]),
         )
 
@@ -672,9 +850,9 @@ def graphing(
             fig.add_subplot(),
             t1,
             y[:, :2],
-            "two-compartment",
-            ["Soma", "node"],
-            t_end,
+            "2-compartment model",
+            ["Soma", "Node"],
+            window,
             colours=(SOMA, COLOURS["two"]),
         )
 
@@ -683,71 +861,29 @@ def graphing(
             fig.add_subplot(),
             t2,
             input_trace(graph, t2, x),
-            "Input",
+            "Input current",
             [],
-            t_end,
+            window,
             ylabel="Current (pA)",
             colours=[GREY],
         )
 
-    elif kind == "Multigraph":
-        gs = fig.add_gridspec(2, 3)
-        cols = [1, 3, 5, 9, 13, 21, 29, 37, 45]
-        top = fig.add_subplot(gs[0, :])
-        # the nodes are a spatial series: one sequential map, darkest
-        # nearest the soma, which is black
-        _panel(
-            top,
-            t1,
-            y[:, [c - 1 for c in cols]],
-            "multi-compartment",
-            ["Soma"] + [f"node {c}" for c in cols[1:]],
-            t_end,
-            colours=[SOMA, *sequential(cols[1:])],
-        )
-        top.legend(
-            ["Soma"] + [f"node {c}" for c in cols[1:]],
-            loc="center left",
-            bbox_to_anchor=(1.0, 0.5),
-        )
-        _panel(
-            fig.add_subplot(gs[1, 0]),
-            t2,
-            x[:, :2],
-            "Two-Compartment (Node 3)",
-            ["Soma", "node"],
-            t_end,
-            colours=(SOMA, COLOURS["two"]),
-        )
-        _panel(
-            fig.add_subplot(gs[1, 1]),
-            t3,
-            z[:, :2],
-            "Two-Compartment (Node 5)",
-            ["Soma", "node"],
-            t_end,
-            colours=(SOMA, COLOURS["two"]),
-        )
-        _panel(
-            fig.add_subplot(gs[1, 2]),
-            t2,
-            input_trace(graph, t2, x),
-            "Input",
-            [],
-            t_end,
-            ylabel="Current (pA)",
-            colours=[GREY],
-        )
-        fig.suptitle(
-            "Comparison of 2 Compartment and Multi-Compartment Models "
-            "with Input"
-        )
-
-    else:
-        plt.close(fig)
-        raise ValueError(f"unknown graph Type {kind!r}")
+    else:  # Multigraph
+        _multigraph(fig, graph, (t1, y, t2, x, t3, z), window)
 
     return fig
+
+
+_GRAPH_TYPES = (
+    "Contour",
+    "ModelComparison",
+    "ModelComparison2",
+    "NodeComparison",
+    "MultiCompartment",
+    "TwoCompartment",
+    "Input",
+    "Multigraph",
+)
 
 
 def threshold_figure(
