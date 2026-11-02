@@ -33,6 +33,120 @@ same version as the package, bumped in the same release PR.
   a state at rest. The first stop time now follows the step it chose. No
   golden trace moved (#108).
 
+## 1.10.0 (2 Nov 2026)
+
+The figures are redrawn to one style (#137): paper-width PNG plus PDF,
+one model-to-colour map, units on every axis (#138), no non-measurement
+drawn as data (#136), a JSON beside every figure that `--replot` redraws
+(#139), a reproducible threshold composite (#140) and trace figures that
+mark the compared values (#141). Arguments no cell or search can use now
+raise a `ValueError` (#72), and `describe()` names `klt_to_leak` (#129).
+No published number moves: every input that is now refused used to fail
+or return a meaningless result, and the golden traces are bit-identical.
+
+### Added
+
+- `msoaxon/msoaxon.mplstyle`, the figures' shared style (8 pt text, 7 pt
+  ticks and legends, no top or right spines, constrained layout, 300 dpi,
+  text kept as text in PDFs), and in `msoaxon.plotting`: `use_style()`,
+  `agg()`, `figure(width="single" | "double" | inches)` at 3.4 or 7.0 in,
+  `save(fig, path)` writing PNG and PDF (SVG on request), `units()` (µs,
+  MΩ), `panel_label()` and `threshold_ratio_panel()` (#137).
+- Every figure has a JSON that redraws it: `plotting.save(..., data=,
+  args=)` writes `<name>.json` beside the images, with a `meta` entry (the
+  script, its arguments, `git describe` or the package version, and the
+  model mode), and each plotting script takes `--replot JSON` to redraw
+  from it without simulating. The threshold sweeps write
+  `<stim>_thresholds_cpt<node>.json`; `somatic_spike.json` keeps the
+  traces, `dendrites.json` panel B's waveforms and panel E's curves, and
+  `combine_all.py --out` writes the runs it draws (thinned to at most 2000
+  samples, `plotting.thin`). Drawn arrays are rounded to 6 significant
+  digits (`plotting.compact`); results already in the JSON are not. The
+  dendrites figure names its variant (KLT setting, dendrite Ra) in its
+  title (#139).
+
+### Changed
+
+- Every plotting script and `plotting.graphing` / `threshold_figure` draw
+  through `plotting.figure` and write through `plotting.save`: figures are
+  7.0 in wide (3.4 in for a threshold panel), at 300 dpi, with a PDF beside
+  each PNG. `coincidence_window.py` panel A and `dendrites.py` panel E share
+  one function. Display only; no computed number changes (#137).
+- The configuration in `FiresWithoutInputError` and `spike_height`
+  messages names `klt_to_leak` in `mem=membrane(...)`, read from the
+  morphology's key where the setting lives; no result changes (#129).
+- Arguments no cell or search can use raise a `ValueError` naming the
+  argument, before any simulation: `coincidence.window` and
+  `window_edges` with `margin <= 0` (the delay search assumes the input
+  spikes at its best delay), `half_width` with `margin < 0`, a float
+  spike criterion `<= 0` (`ZeroDivisionError` or `inf` before),
+  `multi.with_dendrites` with `n_seg`, `length` or `diameter <= 0`,
+  `mso_axon` and `two_cpt` with `t_end <= 0` or `max_step <= 0`
+  (`mso_axon(max_step=0)` silently ran with its default),
+  `two_cpt(r1 <= 0)`, and `SynParams` with equal or non-positive
+  `epsg_tau` (NaN conductances before) (#72).
+- `spiking.matlab_round(x, digits)` with `digits > 0` divides by
+  `10 ** digits`, so `matlab_round(0.3, 1)` is 0.3, not
+  0.30000000000000004; `digits <= 0`, the only values the package uses,
+  is unchanged bit for bit (#72).
+- Coverage floor (`fail_under`) raised from 90 to 95, just under
+  the 96.1% the full suite measures without the Rust extension, as
+  CI's coverage job runs (#72).
+- Docs: `coincidence.window`'s run count, `Morphology.g_na`'s note on
+  `membrane()`, the #41 note and an over-long line in this file, and
+  `ruff.toml`'s header (#72).
+- One colour per model in every figure, colour-blind safe (Okabe-Ito,
+  `plotting.COLOURS`: 45-compartment `#0072B2`, TwoCpt.m `#D55E00`,
+  Goldwyn 2019 `#009E73`); a model's variants (KLT replaced, frozen or
+  removed, rest rebalanced, dendritic) keep its colour and differ by line
+  style (`plotting.model_style`). Ordered parameters (rheobase multiple,
+  Multigraph node, dendritic site, Goldwyn's coupling strengths) use one
+  sequential map (`plotting.sequential`), with the soma in black.
+  Legends that covered data moved below their panels; every axis names its
+  unit, with µs, µm and MΩ glyphs (`plotting.glyphs`), and EPSG
+  thresholds are in nS per EPSG. Display only (#138).
+- `making_threshold_graphs.py` writes the 2 x 4 composite
+  `thresholds_overview.png` (and PDF, JSON) as its main output: one column
+  per stimulus, one row per `--node` (now repeatable, default 3 and 5),
+  the rows of a column on one y axis, a residual strip under each panel
+  ((two - multi) / multi in percent, `plotting.threshold_residual`), and
+  the ramp's and sine's optima marked (`plotting.mark_minimum`). It is
+  drawn by `plotting.threshold_grid`. The single panels need
+  `--per-stimulus`. `SWEEPS` entries are a `Sweep` named tuple carrying
+  the units; the EPSG-pair delay is drawn in µs, as in the coincidence
+  figures, and the two-compartment curve is dashed so the
+  45-compartment curve shows where they agree. Same thresholds, same
+  search (#140).
+- Trace figures show the event and the compared values (#141):
+  `plotting.graphing` draws a few ms around the first trace to rise 10 mV
+  (`plotting.event_window`; `window=None` or `combine_all.py --full` for the
+  whole run, `--window T0 T1` for any), shares the y axis between panels
+  that compare voltages, draws the soma thin on top, titles every panel
+  the same way, gives Multigraph a colour bar for node order, and draws
+  `Contour` as a compartment-by-time heat map. `somatic_spike.png` aligns
+  each trace at its inflection point, brackets the amplitude, and draws
+  Scott et al 2005's values as a band or lines. `resonance.png` marks
+  each model's resonances, with their offsets from Mikiel-Hunter et al
+  2016 in the legend, and labels its log axes with plain numbers
+  (`plotting.plain_log_ticks`). `dendrites.png` panel E marks each
+  curve's 3% half-width and half Myoga's 221 µs window. Display only.
+
+### Fixed
+
+- Threshold figures no longer draw a search's ceiling as a measurement:
+  a point equal to `max_I` ("no threshold found") is a hollow marker on a
+  labelled dotted line, unjoined to the curve, and every point has a
+  marker, with the search's rounding (10 pA, 1 for EPSGpair) under the
+  title. New `plotting.ceiling_mask` and `plotting.plot_thresholds` (#136).
+- The coupling plane's colour scales span at least 10% of their median
+  (`plotting.colour_limits`) instead of stretching a 2 µs spread over the
+  whole map, and a coarse grid writes each cell's value (#136).
+- `coincidence_window.png` draws `window()`'s widths in a strip under the
+  probability panel instead of at invented heights on the probability
+  axis, and gives each noisy-trial probability a 95% Wilson interval
+  (`plotting.wilson_interval`, `plotting.width_strip`), with the trial
+  count in the legend. Display only; no computed number changes (#136).
+
 ## 1.9.0 (29 Oct 2026)
 
 `rebalance_rest=True` no longer builds a cell that fires on its own (#128):
@@ -589,8 +703,9 @@ Tests and housekeeping only; results are unchanged.
 
 - 1.2.0's "13 runs instead of 11" for the 45-compartment, model-EPSG 3%
   window counts the delay search's probes; counting `window()`'s
-  `max_delay` probe as well gives 14. #41 tracks whether the hedge should
-  apply to that search.
+  `max_delay` probe as well gives 14. #41 looked at whether the hedge
+  should apply to that search and closed it as accepted, with no change:
+  other hedge values save that one window and move others by one run.
 - `msoAxon.m~`, a tracked editor backup that differs from `msoAxon.m`, is
   kept as part of the historical record (an earlier draft of the 45-CPT
   model); README.md now says so, and `*~` is ignored so no new backups get
@@ -627,9 +742,10 @@ Tests and housekeeping only; results are unchanged.
   the multi and two step responses rise smoothly through the 10 mV
   criterion (9.96 mV at 0.9999x, 10.02 at 1.00005x; the spike takes off
   1-2% above), as the EPSG pairs do: with the overshoot hedge above,
-  rheobase takes 10 runs instead of 15 for both multi and two. With KLT blocked the response is all
-  or none (0.3 mV just below, a 15 mV spike just above); there the search
-  makes exactly bisection's 19 runs, to the same value. Rheobase moves
+  rheobase takes 10 runs instead of 15 for both multi and two. With KLT
+  blocked the response is all or none (0.3 mV just below, a 15 mV spike
+  just above); there the search makes exactly bisection's 19 runs, to the
+  same value. Rheobase moves
   within rel_tol (multi 3784.180 -> 3784.101 pA, -2.1e-5; two 3845.947 ->
   3845.990 pA, +1.1e-5; KLT blocked unchanged), and rheobase now depends on
   the search, so this is a minor version (#19).

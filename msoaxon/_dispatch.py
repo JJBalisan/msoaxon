@@ -335,5 +335,9 @@ def describe(
         knobs = ", ".join(
             f"{k}={v}" for k, v in zip(_MEMBRANE_KEY, mem.key, strict=True)
         )
-        parts.append(f"mem=membrane({knobs})")
+        # klt_to_leak lives in the morphology's key (multi._klt_to_leak)
+        mk = mem.morph_key
+        moved = isinstance(mk, tuple) and mk[0] == "klt_to_leak"
+        kind = mk[1] if moved else None
+        parts.append(f"mem=membrane({knobs}, klt_to_leak={kind!r})")
     return ", ".join(parts)

@@ -101,4 +101,11 @@ def matlab_round(x: float, digits: int = 0) -> float:
         The rounded value.
     """
     scale = 10.0**digits
-    return math.copysign(math.floor(abs(x) * scale + 0.5), x) * 10.0**-digits
+    n = math.copysign(math.floor(abs(x) * scale + 0.5), x)
+    if digits > 0:
+        # 10.0**-digits is inexact (0.1 is not a binary fraction), so
+        # multiplying by it gave 0.30000000000000004 for (0.3, 1); the
+        # division is correctly rounded. digits <= 0 (the only callers)
+        # keep the multiplication, bit for bit.
+        return n / scale
+    return n * 10.0**-digits

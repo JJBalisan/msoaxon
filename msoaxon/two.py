@@ -339,9 +339,10 @@ def get_params(
     Raises:
         ValueError: For a value outside its range (see two_cpt), for
             fractions that leave a compartment no leak conductance,
-            for gC together with a non-default r1, for klt_to_leak not
-            None, "chord" or "slope", or "slope" at a v0 where KLT has
-            no positive slope conductance.
+            for an r1 that is not > 0, for gC together with a
+            non-default r1, for klt_to_leak not None, "chord" or
+            "slope", or "slope" at a v0 where KLT has no positive slope
+            conductance.
     """
     if klt_to_leak not in (None, "chord", "slope"):
         raise ValueError(
@@ -355,6 +356,8 @@ def get_params(
         gNa2,
         (soma_na_vhalf, axon_na_vhalf),
     )
+    if not r1 > 0:
+        raise ValueError(f"r1 must be > 0, got {r1!r}")
     if gC is not None and r1 != R1_DEFAULT:
         raise ValueError(
             "pass gC or r1, not both: gC fixes the input resistance"
@@ -815,9 +818,11 @@ def two_cpt(
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
             ramp with stop <= start, a free-coupling argument outside
-            its range, klt_to_leak not None, "chord" or "slope", or an
-            unknown mode.
+            its range, an r1, t_end or max_step that is not > 0,
+            klt_to_leak not None, "chord" or "slope", or an unknown
+            mode.
     """
+    _common.check_times(t_end, max_step)
     _common.check_args(
         stim_type,
         model_type,

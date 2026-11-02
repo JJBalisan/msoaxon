@@ -1,6 +1,6 @@
 [project]
 name = "msoaxon"
-version = "1.9.0"
+version = "1.10.0"
 description = "Python port of the 2-compartment vs 45-compartment MSO axon model comparison"
 requires-python = ">=3.11"
 dependencies = ["numpy", "scipy", "matplotlib"]
@@ -44,4 +44,4 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 90  # CI fails if msoaxon line + branch coverage drops below this
+fail_under = 95  # line + branch; 96.1 measured without the Rust extension

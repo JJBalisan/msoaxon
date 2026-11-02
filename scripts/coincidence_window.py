@@ -10,9 +10,9 @@ against noisy trials. Threshold curves are drawn on a 50 us grid.
 """  # noqa: E501 (printed verbatim as --help)
 
 import argparse
-import json
 import pathlib
 from concurrent import futures
+from typing import Any
 
 import numpy as np
 
@@ -42,6 +42,128 @@ CONFIGS = {
 }
 
 
+def strip_rows(
+    direct: dict[tuple[str, str], dict[float, float]], colours: list[str]
+) -> list[tuple[str, float, str]]:
+    """Returns the bars of the window strip: each model's 3% window.
+
+    Args:
+        direct: window()'s half-widths [us] by (model, kinetics) and margin.
+        colours: One colour per model, in CONFIGS order.
+
+    Returns:
+        (short model name, width [us], colour) per model, model EPSG.
+    """
+    kname = next(iter(KINETICS))
+    return [
+        (cname.split(" (")[0], direct[cname, kname][0.03], c)
+        for cname, c in zip(CONFIGS, colours, strict=True)
+    ]
+
+
+def draw(summary: dict[str, Any]) -> Any:
+    """Draws the threshold curves and the probability panel from the JSON.
+
+    Args:
+        summary: What run() writes to coincidence_window.json.
+
+    Returns:
+        The figure.
+    """
+    from msoaxon import plotting
+
+    delays = np.array(summary["curve_delays_ms"])
+    curves = {
+        (c, k): np.array(summary["curves"][f"{c} | {k}"])
+        for c in CONFIGS
+        for k in KINETICS
+    }
+    direct = {
+        (r["model"], r["epsg"]): {m: r[f"margin_{m}"] for m in MARGINS}
+        for r in summary["half_widths_us"]
+    }
+    noisy = summary["noisy_check"]
+    mc_delays, prob = (
+        np.array(noisy["delays_ms"]),
+        np.array(noisy["probability"]),
+    )
+    mc_width, trials = noisy["half_width_us"], noisy["n_trials"]
+
+    fig = plotting.figure("double", height=4.4)
+    gs = fig.add_gridspec(2, 2, height_ratios=(4, 1))
+    a1 = fig.add_subplot(gs[:, 0])
+    a2 = fig.add_subplot(gs[0, 1])
+    strip = fig.add_subplot(gs[1, 1], sharex=a2)
+    colours = [plotting.COLOURS[k] for k in ("multi", "two", "goldwyn")]
+    plotting.threshold_ratio_panel(
+        a1,
+        delays,
+        [
+            (
+                curves[(cname, kname)],
+                {
+                    "color": c,
+                    "ls": ls,
+                    "label": f"{cname.split(' (')[0]}, {kname.split(' (')[0]}",
+                },
+            )
+            for c, cname in zip(colours, CONFIGS, strict=True)
+            for kname, ls in zip(KINETICS, ("-", "--"), strict=True)
+        ],
+        MARGINS,
+    )
+    a1.set(
+        xlim=(0, 600),
+        title="Threshold rises with delay\n(dotted: 0.5% and 3% input margins)",
+    )
+    # below the panel: six entries do not fit beside the curves at 7 in
+    a1.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2))
+    plotting.panel_label(a1, "A")
+
+    sym = np.concatenate([-mc_delays[:0:-1], mc_delays]) * 1e3
+    p_sym = np.concatenate([prob[:0:-1], prob])
+    lo, hi = plotting.wilson_interval(p_sym, trials)
+    a2.errorbar(
+        sym,
+        p_sym,
+        yerr=[p_sym - lo, hi - p_sym],
+        fmt="o-",
+        color=colours[1],
+        capsize=2,
+        label=plotting.glyphs(
+            f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us;\n"
+            f"{trials} trials per delay, 95% Wilson interval)"
+        ),
+    )
+    for ax in (a2, strip):
+        ax.axvspan(
+            -MYOGA_US / 2,
+            MYOGA_US / 2,
+            color="0.85",
+            zorder=0,
+            label=plotting.glyphs(f"Myoga 2014 in vitro: {MYOGA_US} us"),
+        )
+    a2.set(
+        xlim=(-320, 320),
+        ylim=(-0.03, 1.05),
+        ylabel="Spike probability",
+        title="Coincidence window at half maximum (model EPSG)",
+    )
+    a2.tick_params(labelbottom=False)
+    # window()'s widths in their own strip: a bar's height carries no data
+    plotting.width_strip(strip, strip_rows(direct, colours))
+    strip.set_xlabel(plotting.units("Delay between EPSGs", "us"))
+    strip.set_title("window(), 3% margin", fontsize=7, loc="left")
+    # below the strip, as panel A's is below A
+    strip.legend(
+        *a2.get_legend_handles_labels(),
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.9),
+    )
+    plotting.panel_label(a2, "B")
+    return fig
+
+
 def main() -> None:
     """Parses the command line and runs the coincidence-window comparison."""
     ap = argparse.ArgumentParser(
@@ -62,7 +184,20 @@ def main() -> None:
         help="coarse grids and 1%% threshold tolerance: a smoke test, "
         "not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        from msoaxon import plotting
+
+        plotting.agg()
+        for path in plotting.save(draw(plotting.load(a.replot)), a.replot):
+            print(f"saved {path}")
+        return
     # one pool for every parallel call below
     with msoaxon.process_pool() as pool:
         run(a, pool)
@@ -191,86 +326,6 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
         flush=True,
     )
 
-    # figure: normalised threshold curves, and probability curves
-    # imported here rather than at the top: pool workers re-import this script,
-    # and only the main process draws
-    import matplotlib as mpl
-
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(14, 6.2))
-    colours = ["#1f5fa8", "#d2691e", "#2e8b57"]
-    for c, cname in zip(colours, CONFIGS, strict=True):
-        for kname, ls in zip(KINETICS, ("-", "--"), strict=True):
-            th = curves[(cname, kname)]
-            a1.plot(
-                delays * 1e3,
-                th / th[0],
-                color=c,
-                ls=ls,
-                lw=2,
-                label=f"{cname.split(' (')[0]}, {kname.split(' (')[0]}",
-            )
-    for m in MARGINS:
-        a1.axhline(1 + m, color="0.5", lw=0.8, ls=":")
-    a1.set(
-        xlim=(0, 600),
-        ylim=(0.98, 2.05),
-        xlabel="Delay between EPSGs (us)",
-        ylabel="Threshold / coincident threshold",
-        title="Threshold rises with delay (dotted: 0.5% and 3% input margins)",
-    )
-    a1.legend(fontsize=7.5, frameon=False, loc="lower right")
-
-    sym = np.concatenate([-mc_delays[:0:-1], mc_delays]) * 1e3
-    a2.plot(
-        sym,
-        np.concatenate([prob[:0:-1], prob]),
-        "o-",
-        color=colours[1],
-        lw=1.5,
-        label=f"2-cpt TwoCpt.m, noisy trials (FWHM {mc_width:.0f} us)",
-    )
-    for c, cname, y in zip(
-        colours, CONFIGS, (0.56, 0.5, 0.44), strict=True
-    ):  # offset so all show
-        w = direct[cname, list(KINETICS)[0]][0.03]
-        a2.plot(
-            [-w / 2, w / 2],
-            [y, y],
-            color=c,
-            lw=4,
-            alpha=0.8,
-            label=f"{cname.split(' (')[0]}: {w:.0f} us (window(), 3%)",
-        )
-    a2.axvspan(
-        -MYOGA_US / 2,
-        MYOGA_US / 2,
-        color="0.85",
-        zorder=0,
-        label=f"Myoga 2014 in vitro: {MYOGA_US} us",
-    )
-    a2.set(
-        xlim=(-320, 320),
-        ylim=(-0.03, 1.05),
-        xlabel="Delay between EPSGs (us)",
-        ylabel="Spike probability",
-        title=(
-            "Coincidence window at half maximum "
-            "(model EPSG; bars offset around 0.5)"
-        ),
-    )
-    a2.legend(
-        fontsize=7.5,
-        frameon=False,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.13),
-        ncol=2,
-    )
-    fig.tight_layout()
-    fig.savefig(out / "coincidence_window.png", dpi=140)
-
     summary = {
         "curve_delays_ms": delays.tolist(),
         "margins": MARGINS,
@@ -294,10 +349,18 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
             "peak_probability": float(prob.max()),
             "delays_ms": mc_delays.tolist(),
             "probability": prob.tolist(),
+            "n_trials": a.trials,
         },
     }
-    (out / "coincidence_window.json").write_text(json.dumps(summary, indent=1))
-    print(f"saved {out}/coincidence_window.png and .json")
+    # imported here rather than at the top: pool workers re-import this script,
+    # and only the main process draws
+    from msoaxon import plotting
+
+    plotting.agg()
+    plotting.save(
+        draw(summary), out / "coincidence_window", data=summary, args=vars(a)
+    )
+    print(f"saved {out}/coincidence_window.png, .pdf and .json")
 
 
 if __name__ == "__main__":

@@ -43,6 +43,17 @@ ARMS = {
         {"klt_to_leak": "slope"},
     ),
 }
+# each arm's (model, variant) for plotting.model_style: one colour per model,
+# its variants dashed, dotted or dash-dotted
+ARM_STYLES = {
+    "45-compartment (msoAxon.m)": ("multi", 0),
+    "45-compartment, rest rebalanced": ("multi", 2),
+    "45-compartment, KLT frozen at its resting conductance": ("multi", 3),
+    "45-compartment, KLT replaced by its slope conductance": ("multi", 1),
+    "2-compartment (TwoCpt.m)": ("two", 0),
+    "2-compartment, KLT frozen at its resting conductance": ("two", 3),
+    "2-compartment, KLT replaced by its slope conductance": ("two", 1),
+}
 # --quick: a smoke test with coarse grids, short trains and loose tolerances
 QUICK_ARMS = (
     "45-compartment (msoAxon.m)",
@@ -165,18 +176,73 @@ def markdown(results: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def plot(results: dict[str, Any], path: pathlib.Path) -> None:
-    """Draws the three curves of every arm."""
+def peak(key: str, d: dict[str, Any]) -> tuple[float, float] | None:
+    """Returns the point a panel marks for one arm: its resonance.
+
+    Args:
+        key: "subthreshold", "spike" or "epsg".
+        d: That protocol's result for the arm (or its JSON).
+
+    Returns:
+        (frequency [Hz], value): the impedance peak (f_res, z_peak) or the
+        threshold minimum (f_best, threshold), or None when the arm has no
+        resonance.
+    """
+    if not d.get("resonant"):
+        return None
+    if key == "subthreshold":
+        return d["f_res"], d["z_peak"]
+    return d["f_best"], d["threshold"]
+
+
+def legend_label(name: str, r: dict[str, Any]) -> str:
+    """Returns an arm's legend entry: its name and its three resonances.
+
+    Args:
+        name: The arm.
+        r: Its results (or their JSON).
+
+    Returns:
+        "name: 373 (+131), 475 (+190), 434 (+117) Hz", each resonance with
+        its offset from TARGETS, or "none" for a protocol without one.
+    """
+    parts = []
+    for key, target in TARGETS.items():
+        at = peak(key, r[key])
+        parts.append(
+            "none" if at is None else f"{at[0]:.0f} ({at[0] - target:+.0f})"
+        )
+    return f"{name}: {', '.join(parts)} Hz"
+
+
+def plot(
+    results: dict[str, Any],
+    path: pathlib.Path,
+    data: dict[str, Any] | None = None,
+    args: dict[str, Any] | None = None,
+) -> None:
+    """Draws the three curves of every arm, as path.png and path.pdf.
+
+    Args:
+        results: Per arm, what measure_arm() returns (or its JSON).
+        path: Where to save the figure.
+        data: The JSON to write beside it (see plotting.save), or None.
+        args: The script's arguments, for the JSON.
+    """
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.4))
+    plotting.agg()
+    fig = plotting.figure("double", height=3.4)
+    axes = fig.subplots(1, 3)
     panels = (
-        ("subthreshold", "z", "Soma impedance |Z| (MOhm)", "Frequency (Hz)"),
+        (
+            "subthreshold",
+            "z",
+            plotting.units("Soma impedance |Z|", "MOhm"),
+            "Frequency (Hz)",
+        ),
         ("spike", "thresholds", "Sine-train threshold (pA)", "Frequency (Hz)"),
         (
             "epsg",
@@ -188,18 +254,32 @@ def plot(results: dict[str, Any], path: pathlib.Path) -> None:
     for ax, (key, ykey, ylabel, xlabel) in zip(axes, panels, strict=True):
         for name, r in results.items():
             d = r[key]
-            ax.plot(d["freqs"], d[ykey], ".-", ms=4, lw=1.2, label=name)
-        ax.axvline(TARGETS[key], color="k", ls=":", lw=1)
+            style = plotting.model_style(*ARM_STYLES[name])
+            ax.plot(d["freqs"], d[ykey], marker=".", label=name, **style)
+            # the arm's resonance (its value and offset are in the legend)
+            at = peak(key, d)
+            if at is not None:
+                ax.plot(*at, marker="D", ms=5, mec="k", color=style["color"])
+        ax.axvline(TARGETS[key], color=plotting.GREY, ls=":", lw=1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         if key != "subthreshold":
             ax.set_yscale("log")
-    axes[0].legend(fontsize=7, frameon=False)
-    fig.suptitle(
-        "Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)", fontsize=10
+            plotting.plain_log_ticks(ax)
+    # one legend for the three panels, below them: at 7 in the arm names are
+    # wider than a panel
+    handles, names = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        [legend_label(name, results[name]) for name in names],
+        loc="outside lower center",
     )
-    fig.tight_layout()
-    fig.savefig(path, dpi=130)
+    fig.suptitle(
+        "Dotted lines: Mikiel-Hunter et al 2016 (242, 285, 317 Hz)\n"
+        "Diamonds: resonances; legend: subthreshold, spike, EPSG [Hz] "
+        "(offset from the paper's)"
+    )
+    plotting.save(fig, path, data=data, args=args)
 
 
 def main() -> None:
@@ -223,7 +303,19 @@ def main() -> None:
         help="coarse grids, 20 ms trains and 3%% tolerance, three models: "
         "a smoke test, not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        plot(
+            json.loads(pathlib.Path(a.replot).read_text())["results"], a.replot
+        )
+        print(f"redrew {a.replot}")
+        return
     out = pathlib.Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -236,21 +328,20 @@ def main() -> None:
             print(summary(name, results[name]), flush=True)
     print()
     print(markdown(results))
-    plot(results, out / "resonance.png")
-    (out / "resonance.json").write_text(
-        json.dumps(
-            _clean(
-                {
-                    "mode": a.mode or "default",
-                    "quick": a.quick,
-                    "targets_hz": TARGETS,
-                    "results": results,
-                }
-            ),
-            indent=1,
-        )
+    plot(
+        results,
+        out / "resonance.png",
+        data=_clean(
+            {
+                "mode": a.mode or "default",
+                "quick": a.quick,
+                "targets_hz": TARGETS,
+                "results": results,
+            }
+        ),
+        args=vars(a),
     )
-    print(f"saved {out}/resonance.png and .json")
+    print(f"saved {out}/resonance.png, .pdf and .json")
 
 
 if __name__ == "__main__":

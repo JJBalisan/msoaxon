@@ -41,6 +41,8 @@ MULTI_THRESHOLD_NS = 48.01
 MAX_RATIO = 10.0  # Goldwyn 2019 Methods: couple12 / couple21 does not exceed it
 AXIS_LO, AXIS_HI = 0.1, 0.9
 DEFAULT_STEP, QUICK_STEP = 0.1, 0.4
+# the plot writes each cell's value when the grid is at least this coarse
+COARSE_STEP = 0.2
 DEFAULT_CEILING, QUICK_CEILING = 2000.0, 300.0  # [nS]
 NODE = 3  # the lookup node whose constants are the default cell
 # Goldwyn 2019 Fig 3's stars; the lookup's point is added in landmarks()
@@ -373,10 +375,14 @@ def plot(
     step: float,
     located: dict[str, Any] | None,
     path: pathlib.Path,
+    data: dict[str, Any] | None = None,
+    args: dict[str, Any] | None = None,
 ) -> None:
     """Draws the window and the threshold over the plane.
 
-    Grid points that spike are coloured squares; grey squares are cells with
+    Grid points that spike are coloured squares, on a colour scale at least
+    10% of the median wide (plotting.colour_limits) and, on a coarse grid,
+    labelled with their value; grey squares are cells with
     a graded response only (a circle) or no spike or window (a cross); the
     lookup's point, Goldwyn's stars and the located point are
     marked, and the grey dots are the 44 axon nodes' own constants.
@@ -386,19 +392,20 @@ def plot(
         step: The grid spacing, which sizes the squares.
         located: The point closest to the 45-compartment model, or None to
             leave it unmarked.
-        path: Where to save the PNG.
+        path: Where to save the PNG (a PDF is written beside it).
+        data: The JSON to write beside it (see plotting.save), or None.
+        args: The script's arguments, for the JSON.
     """
     # imported here rather than at the top, like the pool scripts, so importing
     # this module stays cheap
-    import matplotlib as mpl
+    from msoaxon import plotting
 
-    mpl.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.4), sharey=True)
+    plotting.agg()
+    fig = plotting.figure("double", height=3.3)
+    axes = fig.subplots(1, 2, sharey=True)
     names = landmarks()
     for ax, key, title in (
-        (axes[0], "window_us", "3% coincidence window (us)"),
+        (axes[0], "window_us", plotting.units("3% coincidence window", "us")),
         (axes[1], "threshold", "Coincident threshold (nS)"),
     ):
         found = [
@@ -408,15 +415,36 @@ def plot(
         ]
         graded = [p for p in points if p["status"] == "graded"]
         lost = [p for p in points if p not in found and p not in graded]
-        size = 900 * step if step < 0.2 else 700
+        # the squares' areas [pt^2]: a fine grid keeps its 13 in proportion
+        # scaled to 7 in; a coarse one gets squares big enough to label
+        size = 900 * step * (7.0 / 13) ** 2 if step < COARSE_STEP else 500
+        values = [p[key] for p in found]
+        # never autoscaled: a 2 us spread must not fill the colour map
+        vmin, vmax = plotting.colour_limits(values) if found else (0, 1)
         sc = ax.scatter(
             [p["couple12"] for p in found],
             [p["couple21"] for p in found],
-            c=[p[key] for p in found],
+            c=values,
             s=size,
             marker="s",
             cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
         )
+        if step >= COARSE_STEP:  # few cells: write each one's value
+            for p in found:
+                dark = (p[key] - vmin) / (vmax - vmin) < 0.5
+                ax.annotate(
+                    f"{p[key]:.0f}" if key == "window_us" else f"{p[key]:.1f}",
+                    (p["couple12"], p["couple21"]),
+                    xytext=(0, -7),
+                    va="center",
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=6,
+                    color="w" if dark else "k",
+                    zorder=7,
+                )
         for group, mark, label in (
             (graded, "o", "graded response, no spike"),
             (lost, "x", "no spike, or no window"),
@@ -433,28 +461,31 @@ def plot(
                 [p["couple21"] for p in group],
                 c="0.35",
                 marker=mark,
-                s=25,
+                s=12,
                 label=label,
             )
         ax.scatter(
             constants.COUPLING1,
             constants.COUPLING2,
-            s=6,
+            s=3,
             c="0.55",
             label="the 44 axon nodes' constants",
         )
+        # node 3 in black; Goldwyn's weak, forward and strong couplings are
+        # an ordered series, so one sequential map (no model colours here:
+        # the whole plane is the two-compartment model)
         for (name, (c12, c21)), colour, marker in zip(
             names.items(),
-            ("k", "tab:blue", "tab:green", "tab:red"),
+            ["k", *plotting.sequential([0, 1, 2])],
             ("D", "*", "*", "*"),
             strict=True,
         ):
             ax.scatter(
                 [c12],
                 [c21],
-                c=colour,
+                color=colour,
                 marker=marker,
-                s=120,
+                s=60,
                 edgecolors="w",
                 label=name,
                 zorder=5,
@@ -464,27 +495,32 @@ def plot(
                 [located["couple12"]],
                 [located["couple21"]],
                 facecolors="none",
-                edgecolors="tab:orange",
-                s=380,
-                linewidths=2.2,
+                edgecolors="k",
+                linestyles="--",
+                s=160,
+                linewidths=1.5,
                 zorder=6,
                 label="closest to the 45-compartment model",
             )
         ax.plot([0, 1], [0, 1], "k:", lw=0.8)  # forward = backward
         ax.set_xlim(0, 1.02)
         ax.set_ylim(0, 1.02)
-        ax.set_xlabel("forward coupling couple12 (soma to axon)")
+        ax.set_xlabel("forward coupling couple12\n(soma to axon)")
         ax.set_title(title)
         fig.colorbar(sc, ax=ax)
     axes[0].set_ylabel("backward coupling couple21 (axon to soma)")
-    axes[0].legend(fontsize=7, loc="upper left", frameon=True)
-    fig.suptitle(
-        "Two-compartment model over Goldwyn et al 2019's coupling plane "
-        "(node 3's area ratio, channels and axonal Na)",
-        fontsize=10,
+    # one legend for both panels, below them: inside, it covered the
+    # diagonal and the cells
+    fig.legend(
+        *axes[0].get_legend_handles_labels(),
+        loc="outside lower center",
+        ncol=3,
     )
-    fig.tight_layout()
-    fig.savefig(path, dpi=130)
+    fig.suptitle(
+        "Two-compartment model over Goldwyn et al 2019's coupling plane\n"
+        "(node 3's area ratio, channels and axonal Na)"
+    )
+    plotting.save(fig, path, data=data, args=args)
 
 
 def main() -> None:
@@ -521,7 +557,18 @@ def main() -> None:
         help="three values per axis and a 300 nS ceiling: "
         "a smoke test, not results",
     )
+    ap.add_argument(
+        "--replot",
+        metavar="JSON",
+        help="redraw the figure from a previous run's JSON, beside it, "
+        "without simulating",
+    )
     a = ap.parse_args()
+    if a.replot:
+        d = json.loads(pathlib.Path(a.replot).read_text())
+        plot(d["points"], d["step"], d["located"], pathlib.Path(a.replot))
+        print(f"redrew {a.replot}")
+        return
     step = a.step or (QUICK_STEP if a.quick else DEFAULT_STEP)
     ceiling = a.ceiling or (QUICK_CEILING if a.quick else DEFAULT_CEILING)
     # the window is steep in the amplitude (0.5% above threshold it is a
@@ -572,32 +619,33 @@ def main() -> None:
             f"couple21={best['couple21']:.4g}, {best['window_us']:.1f} us, "
             f"{best['threshold']:.2f} nS, distance {best_d:.3f}"
         )
-    plot(results, step, best, out / "coupling_plane.png")
-    (out / "coupling_plane.json").write_text(
-        json.dumps(
-            _clean(
-                {
-                    "mode_requested": _fast.requested(a.mode),
-                    "quick": a.quick,
-                    "margin": MARGIN,
-                    "step": step,
-                    "ceiling_nS": ceiling,
-                    "reference": {
-                        "window_us": MULTI_WINDOW_US,
-                        "threshold_nS": MULTI_THRESHOLD_NS,
-                    },
-                    "points": results,
-                    "located": None
-                    if best is None
-                    else {**best, "distance": best_d},
-                    "default": default,
-                    "extremes": extremes(results),
-                }
-            ),
-            indent=1,
-        )
+    plot(
+        results,
+        step,
+        best,
+        out / "coupling_plane.png",
+        data=_clean(
+            {
+                "mode_requested": _fast.requested(a.mode),
+                "quick": a.quick,
+                "margin": MARGIN,
+                "step": step,
+                "ceiling_nS": ceiling,
+                "reference": {
+                    "window_us": MULTI_WINDOW_US,
+                    "threshold_nS": MULTI_THRESHOLD_NS,
+                },
+                "points": results,
+                "located": None
+                if best is None
+                else {**best, "distance": best_d},
+                "default": default,
+                "extremes": extremes(results),
+            }
+        ),
+        args=vars(a),
     )
-    print(f"saved {out}/coupling_plane.png and .json")
+    print(f"saved {out}/coupling_plane.png, .pdf and .json")
 
 
 if __name__ == "__main__":

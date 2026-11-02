@@ -3,6 +3,8 @@
 Also the threshold search, plotting and the combine_all script.
 """
 
+import json
+import math
 import pathlib
 import runpy
 import subprocess
@@ -272,6 +274,9 @@ def test_graph_types_render(runs, kind):
     graph, data = runs
     fig = plotting.graphing({**graph, "Type": kind}, *data)
     assert fig.axes
+    assert fig.get_size_inches()[0] == plotting.WIDTHS["double"]
+    fig.canvas.draw()  # resolves tick labels, so every text has its size
+    assert min(t.get_fontsize() for t in fig.findobj(mpl.text.Text)) >= 6
     mpl.pyplot.close(fig)
 
 
@@ -282,9 +287,78 @@ def test_two_compartment_graph_and_unknown_type(runs):
     )
     with pytest.raises(ValueError):
         plotting.graphing({**graph, "Type": "Nope"}, t2, x)
-    mpl.pyplot.close(
-        plotting.threshold_figure([0, 1], [1, 2], [1, 2], "t", "x")
+    fig = plotting.threshold_figure([0, 1], [1, 2], [1, 2], "t", "x")
+    assert fig.get_size_inches()[0] == plotting.WIDTHS["single"]
+    mpl.pyplot.close(fig)
+
+
+def test_style_file_sets_paper_defaults():
+    plotting.use_style()
+    rc = mpl.rcParams
+    assert rc["savefig.dpi"] == 300
+    assert rc["pdf.fonttype"] == 42  # text stays text in the PDF
+    assert rc["figure.constrained_layout.use"]
+    assert not rc["axes.spines.top"] and not rc["axes.spines.right"]
+    assert min(rc["xtick.labelsize"], rc["legend.fontsize"]) >= 6
+
+
+@pytest.mark.parametrize(
+    "width, inches", [("single", 3.4), ("double", 7.0), (5, 5.0)]
+)
+def test_figure_widths(width, inches):
+    fig = plotting.figure(width)
+    assert tuple(fig.get_size_inches()) == (inches, 0.75 * inches)
+    mpl.pyplot.close(fig)
+    fig = plotting.figure(width, height=2.0)
+    assert fig.get_size_inches()[1] == 2.0
+    mpl.pyplot.close(fig)
+
+
+@pytest.mark.parametrize("name", ["out", "out.png", "out.pdf"])
+def test_save_writes_png_and_pdf(tmp_path, name):
+    fig = plotting.figure("single")
+    fig.subplots().plot([0, 1], [0, 1])
+    paths = plotting.save(fig, tmp_path / name)
+    assert paths == [tmp_path / "out.png", tmp_path / "out.pdf"]
+    assert all(p.stat().st_size > 0 for p in paths)
+    assert not mpl.pyplot.fignum_exists(fig.number)  # save closes it
+    assert mpl.image.imread(paths[0]).shape[1] == round(3.4 * 300)
+
+
+def test_save_svg_on_request(tmp_path):
+    paths = plotting.save(plotting.figure(), tmp_path / "f", svg=True)
+    assert [p.suffix for p in paths] == [".png", ".pdf", ".svg"]
+    assert all(p.exists() for p in paths)
+
+
+def test_units_glyphs():
+    assert plotting.units("Delay", "us") == "Delay (\N{MICRO SIGN}s)"
+    assert (
+        plotting.units("Rin", "MOhm") == "Rin (M\N{GREEK CAPITAL LETTER OMEGA})"
     )
+    assert plotting.units("Threshold", "pA") == "Threshold (pA)"
+
+
+def test_panel_label_and_threshold_ratio_panel():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    th = np.array([40.0, 44.0, 80.0])
+    plotting.threshold_ratio_panel(
+        ax,
+        [0.0, 0.1, 0.2],
+        [(th, {"label": "a"}), (2 * th, {"ls": "--"})],
+        margins=(0.005, 0.03),
+    )
+    plotting.panel_label(ax, "E")
+    curves, hlines = ax.lines[:2], ax.lines[2:]
+    for line in curves:  # each curve over its own zero-delay threshold
+        np.testing.assert_allclose(line.get_xdata(), [0, 100, 200])
+        np.testing.assert_allclose(line.get_ydata(), th / 40)
+    assert curves[1].get_linestyle() == "--"
+    assert [h.get_ydata()[0] for h in hlines] == [1.005, 1.03]
+    assert ax.get_ylim() == (0.98, 2.05)
+    assert "E" in [t.get_text() for t in ax.texts]
+    mpl.pyplot.close(fig)
 
 
 def test_combine_all_script(tmp_path):
@@ -309,7 +383,32 @@ def test_combine_all_script(tmp_path):
     assert (
         "multi-compartment 1, two-compartment 1" in r.stdout
         and out.stat().st_size > 0
+        and out.with_suffix(".pdf").stat().st_size > 0
     )
+    # the JSON redraws it without simulating (#139)
+    data = json.loads(out.with_suffix(".json").read_text())
+    assert data["graph"]["stimType"] == "EPSGpair" and data["graph"]["I"] == 100
+    assert len(data["y"][0]) == 45 and len(data["x"][0]) == 2
+    copy = tmp_path / "replot" / "fig.json"
+    copy.parent.mkdir()
+    copy.write_text(out.with_suffix(".json").read_text())
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "scripts" / "combine_all.py"),
+            "--replot",
+            str(copy),
+        ],
+        capture_output=True,
+        text=True,
+        env={"MPLBACKEND": "Agg", "PATH": ""},
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    shapes = [
+        mpl.image.imread(p).shape for p in (out, copy.with_suffix(".png"))
+    ]
+    assert shapes[0] == shapes[1]
 
 
 @pytest.mark.parametrize("model", [msoaxon.two_cpt, msoaxon.mso_axon])
@@ -461,3 +560,487 @@ def test_crossing_works_in_either_direction():
         respond, 1.0, 0.0, lambda n, y: 1e-4, 10.0, [(1.0, respond(1.0)[1])]
     )
     assert near <= 0.1 <= far and far - near <= 1e-4
+
+
+def test_threshold_figure_draws_the_ceiling_apart():
+    # the ramp sweep's first point returns the ceiling in both models (#136)
+    x = [5.1, 5.2, 5.3]
+    multi, two = [15000.0, 14130.0, 9990.0], [15000.0, 13710.0, 9700.0]
+    fig = plotting.threshold_figure(
+        x, multi, two, "Ramp", "x", ceiling=15000, resolution=10, unit="pA"
+    )
+    ax = fig.axes[0]
+    curves = [line for line in ax.lines if line.get_label().endswith("ment")]
+    for line in curves:  # every point marked, the ceiling point left out
+        assert line.get_marker() == "o"
+        assert np.isnan(line.get_ydata()[0])
+        assert not np.isnan(line.get_ydata()[1:]).any()
+    hollow = [line for line in ax.lines if line.get_markerfacecolor() == "none"]
+    assert len(hollow) == 2
+    for line in hollow:
+        assert list(line.get_xdata()) == [5.1]
+        assert list(line.get_ydata()) == [15000]
+    labels = ax.get_legend_handles_labels()[1]
+    assert "no threshold below 15000 pA" in labels
+    assert "search resolution 10 pA" in ax.get_title()
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_without_ceiling_hits_has_no_ceiling_line():
+    fig = plotting.threshold_figure(
+        [1, 2], [48, 50], [48, 50], "EPSGpair", "x", ceiling=150
+    )
+    labels = fig.axes[0].get_legend_handles_labels()[1]
+    assert labels == ["Multi-Compartment", "Two-Compartment"]
+    mpl.pyplot.close(fig)
+
+
+def test_ceiling_mask():
+    np.testing.assert_array_equal(
+        plotting.ceiling_mask([15000, 14990, 15000.0], 15000),
+        [True, False, True],
+    )
+
+
+def test_colour_limits_have_a_minimum_span():
+    # the quick coupling plane's windows: a 2 us spread around 200 us
+    lo, hi = plotting.colour_limits([199.0, 200.5, 201.0])
+    assert hi - lo == pytest.approx(20.05)  # 10% of the 200.5 median
+    assert (lo + hi) / 2 == pytest.approx(200.0)
+    # a spread wider than the minimum is kept as it is
+    assert plotting.colour_limits([10.0, 50.0]) == (10.0, 50.0)
+    assert plotting.colour_limits([0.0, 0.0]) == (-0.5, 0.5)
+
+
+def test_wilson_interval():
+    lo, hi = plotting.wilson_interval([0.0, 0.5, 1.0], 10)
+    # 0 of 10: [0, 0.2775]; symmetric around 0.5; 10 of 10 mirrors 0 of 10
+    np.testing.assert_allclose(lo, [0, 0.2366, 0.7225], atol=1e-4)
+    np.testing.assert_allclose(hi, [0.2775, 0.7634, 1], atol=1e-4)
+
+
+def test_width_strip_draws_the_widths_centred():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    plotting.width_strip(ax, [("a", 211.0, "C0"), ("b", 172.0, "C1")])
+    assert [list(line.get_xdata()) for line in ax.lines] == [
+        [-105.5, 105.5],
+        [-86.0, 86.0],
+    ]
+    assert [t.get_text() for t in ax.texts] == [
+        "a: 211 \N{MICRO SIGN}s",
+        "b: 172 \N{MICRO SIGN}s",
+    ]
+    assert not ax.yaxis.get_visible()
+    mpl.pyplot.close(fig)
+
+
+def test_coincidence_strip_rows_are_the_three_percent_windows():
+    script = runpy.run_path(str(REPO / "scripts" / "coincidence_window.py"))
+    kinetics = list(script["KINETICS"])
+    direct = {
+        (c, k): {0.005: 1.0 + i, 0.03: 100.0 + i}
+        for i, c in enumerate(script["CONFIGS"])
+        for k in kinetics
+    }
+    rows = script["strip_rows"](direct, ["r", "g", "b"])
+    assert rows == [
+        ("45-compartment", 100.0, "r"),
+        ("2-cpt, TwoCpt.m", 101.0, "g"),
+        ("2-cpt, Goldwyn 2019", 102.0, "b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "stim, jpg_grid, expected",
+    [("ramp", False, 10), ("EPSGpair", False, 1), ("EPSGpair", True, None)],
+)
+def test_threshold_resolution(stim, jpg_grid, expected):
+    script = runpy.run_path(
+        str(REPO / "scripts" / "making_threshold_graphs.py")
+    )
+    assert script["resolution"](stim, jpg_grid) == expected
+
+
+def test_model_colours_are_distinct_and_colour_blind_safe():
+    colours = list(plotting.COLOURS.values())
+    assert len(set(colours)) == len(colours)
+    # the Okabe-Ito entries the scripts share (#138)
+    assert plotting.COLOURS == {
+        "multi": "#0072B2",
+        "two": "#D55E00",
+        "goldwyn": "#009E73",
+    }
+    assert plotting.GREY not in colours and plotting.SOMA not in colours
+    assert plotting.model_style("two", 1) == {"color": "#D55E00", "ls": "--"}
+
+
+def test_sequential_is_ordered_and_stable():
+    lum = [
+        0.299 * r + 0.587 * g + 0.114 * b
+        for r, g, b, _ in plotting.sequential([1.5, 2.0, 3.0])
+    ]
+    assert lum == sorted(lum)  # dark to light along the parameter
+    # a quick run's subset keeps the full run's colours
+    full = plotting.sequential([1.5, 2.0, 3.0])
+    assert plotting.sequential([1.5, 3.0], 1.5, 3.0) == [full[0], full[2]]
+
+
+def test_glyphs():
+    assert plotting.glyphs("FWHM 200 us; distal (180 um), 10 MOhm") == (
+        "FWHM 200 \N{MICRO SIGN}s; distal (180 \N{MICRO SIGN}m), "
+        "10 M\N{GREEK CAPITAL LETTER OMEGA}"
+    )
+    assert plotting.glyphs("bus stop") == "bus stop"
+
+
+def test_graphing_colours_follow_the_models(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "Multigraph"}, *data)
+    top, _bar, two3, two5, inp = fig.axes
+    colours = [mpl.colors.to_hex(line.get_color()) for line in top.lines]
+    assert colours[0] == "#000000"  # the soma
+    assert len(set(colours)) == 9  # nine distinct, ordered node colours
+    assert colours[1:] == [
+        mpl.colors.to_hex(c)
+        for c in plotting.sequential([3, 5, 9, 13, 21, 29, 37, 45])
+    ]
+    for ax in (two3, two5):
+        assert [line.get_color() for line in ax.lines] == [
+            plotting.SOMA,
+            plotting.COLOURS["two"],
+        ]
+    assert inp.lines[0].get_color() == plotting.GREY
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing({**graph, "Type": "NodeComparison"}, *data)
+    for ax in fig.axes:
+        assert [line.get_color() for line in ax.lines] == [
+            plotting.COLOURS["multi"],
+            plotting.COLOURS["two"],
+        ]
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_colours_and_units():
+    fig = plotting.threshold_figure(
+        [1, 2], [48, 50], [48, 51], "EPSGpair", "x", unit="nS per EPSG"
+    )
+    ax = fig.axes[0]
+    assert [line.get_color() for line in ax.lines] == [
+        plotting.COLOURS["multi"],
+        plotting.COLOURS["two"],
+    ]
+    assert ax.get_ylabel() == "Threshold (nS per EPSG)"
+    mpl.pyplot.close(fig)
+
+
+def test_resonance_arms_use_their_model_colour():
+    script = runpy.run_path(str(REPO / "scripts" / "resonance.py"))
+    assert set(script["ARM_STYLES"]) == set(script["ARMS"])
+    for name, (model, _) in script["ARM_STYLES"].items():
+        assert script["ARMS"][name][0] == model  # never another model's
+
+
+def test_save_writes_the_replot_json(tmp_path):
+    fig = plotting.figure("single")
+    data = {"x": [1.0, 2.0], "nan": float("nan")}
+    paths = plotting.save(fig, tmp_path / "f.png", data=data, args={"n": 1})
+    assert paths[-1] == tmp_path / "f.json"
+    d = plotting.load(tmp_path / "f.png")  # found beside the figure
+    assert d["x"] == [1.0, 2.0] and math.isnan(d["nan"])
+    assert d["meta"]["args"] == {"n": 1}
+    assert d["meta"]["version"] == plotting.version() != ""
+    assert d["meta"]["mode"] in ("exact", "fast", "native")
+    # a replot (no data) rewrites the figure, not the JSON; .json is dropped
+    paths = plotting.save(plotting.figure(), tmp_path / "f.json")
+    assert paths == [tmp_path / "f.png", tmp_path / "f.pdf"]
+    again = plotting.load(tmp_path / "f.json")
+    assert math.isnan(again.pop("nan"))
+    assert {k: v for k, v in d.items() if k != "nan"} == again
+
+
+def test_version_falls_back_without_git(monkeypatch):
+    plotting.version.cache_clear()
+    monkeypatch.setattr(plotting.shutil, "which", lambda _: None)
+    try:
+        assert plotting.version() == f"msoaxon {msoaxon.__version__}"
+    finally:
+        plotting.version.cache_clear()
+
+
+def test_compact_and_thin():
+    assert plotting.compact([1.23456789, 1234567.89]) == [1.23457, 1234570.0]
+    assert plotting.compact([[0.1, float("nan")]])[0][0] == 0.1
+    assert plotting.thin(5000) == slice(None, None, 3)
+    assert plotting.thin(100) == slice(None, None, 1)
+
+
+def test_threshold_residual():
+    r = plotting.threshold_residual(
+        [15000, 10000, 200], [15000, 10500, 190], 15000
+    )
+    assert np.isnan(r[0])  # no threshold in either model: no residual
+    np.testing.assert_allclose(r[1:], [5.0, -5.0])
+
+
+def test_mark_minimum_marks_only_an_interior_minimum():
+    fig = plotting.figure()
+    ax = fig.subplots()
+    assert plotting.mark_minimum(ax, [1, 2, 3, 4], [9, 4, 5, 6], "ms") == 1
+    assert ax.lines[-1].get_xdata()[0] == 2
+    assert ax.texts[-1].get_text() == "min 2 ms"
+    assert plotting.mark_minimum(ax, [1, 2, 3], [5, 6, 7], "ms") is None
+    # a ceiling point is no minimum, and neither is the end it leaves
+    assert plotting.mark_minimum(ax, [1, 2, 3], [1, 2, 3], "ms", 1) is None
+    mpl.pyplot.close(fig)
+
+
+def _panel(title, unit, ceiling, thresholds, mark_min):
+    return {
+        "title": title,
+        "xlabel": "x",
+        "x_unit": "us" if unit == "nS per EPSG" else "ms",
+        "x_scale": 1000 if unit == "nS per EPSG" else 1,
+        "unit": unit,
+        "ceiling": ceiling,
+        "resolution": 10 if unit == "pA" else 1,
+        "mark_min": mark_min,
+        "x": [0.0, 0.04, 0.08],
+        "thresholds": thresholds,
+    }
+
+
+def test_threshold_grid():
+    panels = {
+        "ramp": _panel(
+            "Ramp",
+            "pA",
+            15000,
+            {
+                "3": {"multi": [15000, 9000, 9500], "two": [15000, 8800, 9600]},
+                "5": {"multi": [12000, 6000, 7000], "two": [12000, 6100, 7100]},
+            },
+            True,
+        ),
+        "EPSGpair": _panel(
+            "EPSG pair",
+            "nS per EPSG",
+            150,
+            {
+                "3": {"multi": [48, 50, 60], "two": [48, 51, 60]},
+                "5": {"multi": [47, 49, 58], "two": [47, 49, 59]},
+            },
+            False,
+        ),
+    }
+    fig = plotting.threshold_grid(panels, [3, 5])
+    # per column: node 3, its residual, node 5, its residual
+    ramp3, ramp3_res, ramp5, ramp5_res = fig.axes[:4]
+    pair3 = fig.axes[4]
+    assert ramp3.get_ylim() == ramp5.get_ylim()  # nodes share y limits
+    assert ramp3.get_ylabel() == "Threshold (pA)"
+    assert pair3.get_ylabel() == "Threshold (nS per EPSG)"
+    assert ramp5_res.get_xlabel() == "x (ms)"
+    assert fig.axes[7].get_xlabel() == "x (\N{MICRO SIGN}s)"
+    # EPSG-pair delays drawn in us
+    np.testing.assert_allclose(pair3.lines[0].get_xdata(), [0, 40, 80])
+    # the two-compartment curve dashed, the 45's solid
+    assert ramp3.lines[0].get_linestyle() == "-"
+    assert ramp3.lines[2].get_linestyle() == "--"
+    # residual strip: (two - multi) / multi in percent, none at the ceiling
+    res = ramp3_res.lines[-1].get_ydata()
+    assert np.isnan(res[0])
+    np.testing.assert_allclose(res[1:], [-200 / 90, 100 / 95])
+    # the ramp's interior minimum is marked for each model; EPSGpair is not
+    assert [t.get_text() for t in ramp3.texts] == ["min 0.04 ms"]
+    assert len([ln for ln in ramp3.lines if ln.get_marker() == "v"]) == 2
+    assert not pair3.texts
+    assert "search resolution 1 nS per EPSG, 10 pA" in fig.get_suptitle()
+    mpl.pyplot.close(fig)
+
+
+def test_threshold_figure_draws_two_dashed():
+    fig = plotting.threshold_figure([1, 2], [48, 50], [48, 51], "t", "x")
+    assert [line.get_linestyle() for line in fig.axes[0].lines] == ["-", "--"]
+    mpl.pyplot.close(fig)
+
+
+def test_sweeps_carry_units():
+    script = runpy.run_path(
+        str(REPO / "scripts" / "making_threshold_graphs.py")
+    )
+    sweeps = script["SWEEPS"]
+    assert {s.unit for s in sweeps.values()} == {"pA", "nS per EPSG"}
+    assert sweeps["EPSGpair"].x_unit == "us"  # as in the coincidence figures
+    assert [k for k, s in sweeps.items() if s.mark_min] == ["ramp", "sine"]
+
+
+def test_event_window():
+    t = np.linspace(0, 20, 2001)
+    V = np.full((len(t), 2), -68.0)
+    V[t >= 5.3, 1] = -50.0  # node rises 18 mV at 5.3 ms
+    assert plotting.event_window(t, V, 20) == pytest.approx((4.3, 9.3))
+    # no trace rises: centred on the stimulus onset, within the run
+    flat = np.full(len(t), -68.0)
+    assert plotting.event_window(t, flat, 20, start=19) == (18.0, 20.0)
+
+
+def test_graphing_zooms_to_the_event_and_shares_y(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "ModelComparison"}, *data)
+    a1, a2 = fig.axes
+    t0, t1 = a1.get_xlim()
+    assert 3.5 < t0 < 5.5 and t1 - t0 == pytest.approx(5.0)  # not 0 to 20
+    assert a1.get_ylim() == a2.get_ylim()  # the two models compare by eye
+    assert a1.lines[0].get_zorder() > a1.lines[1].get_zorder()  # soma on top
+    assert a2.get_title() == "2-compartment model, node 3"
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing(
+        {**graph, "Type": "ModelComparison"}, *data, window=None
+    )
+    assert fig.axes[0].get_xlim() == (0.0, 20.0)  # the whole run
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing(
+        {**graph, "Type": "ModelComparison"}, *data, window=(6, 8)
+    )
+    assert fig.axes[0].get_xlim() == (6.0, 8.0)
+    mpl.pyplot.close(fig)
+
+
+def test_contour_is_a_heat_map_and_multigraph_has_a_node_bar(runs):
+    graph, data = runs
+    fig = plotting.graphing({**graph, "Type": "Contour"}, *data)
+    ax, bar = fig.axes
+    mesh = ax.collections[0]
+    assert mesh.get_array().shape == (45, len(data[0]))  # cpt x time
+    assert bar.get_ylabel() == "Voltage (mV)"
+    mpl.pyplot.close(fig)
+    fig = plotting.graphing({**graph, "Type": "Multigraph"}, *data)
+    top, bar, two3, two5, _ = fig.axes
+    assert list(bar.get_yticks()) == [3, 5, 9, 13, 21, 29, 37, 45]
+    assert top.get_ylim() == two3.get_ylim() == two5.get_ylim()
+    assert [t.get_text() for t in top.get_legend().get_texts()] == ["Soma"]
+    mpl.pyplot.close(fig)
+
+
+def _script(name):
+    return runpy.run_path(str(REPO / "scripts" / name))
+
+
+def test_resonance_marks_the_json_numbers():
+    script = _script("resonance.py")
+    arm = {
+        "subthreshold": {
+            "resonant": True,
+            "f_res": 373.2,
+            "z_peak": 6.7,
+            "freqs": [20.0, 373.2, 500.0],
+            "z": [2.4, 6.7, 5.5],
+        },
+        "spike": {
+            "resonant": True,
+            "f_best": 475.0,
+            "threshold": 3600.0,
+            "freqs": [250.0, 475.0, 650.0],
+            "thresholds": [5000.0, 3600.0, 4400.0],
+        },
+        "epsg": {"resonant": False, "f_best": 300.0, "dip": 0.99},
+    }
+    assert script["peak"]("subthreshold", arm["subthreshold"]) == (373.2, 6.7)
+    assert script["peak"]("spike", arm["spike"]) == (475.0, 3600.0)
+    assert script["peak"]("epsg", arm["epsg"]) is None
+    assert script["legend_label"]("arm", arm) == (
+        "arm: 373 (+131), 475 (+190), none Hz"
+    )
+
+
+def test_resonance_plot_marks_peaks(monkeypatch, tmp_path):
+    script = runpy.run_path(
+        str(REPO / "scripts" / "resonance.py"), run_name="resonance_test"
+    )
+    figs = []
+    monkeypatch.setattr(
+        plotting, "save", lambda fig, path, **kw: figs.append(fig)
+    )
+    curve = {
+        "freqs": [250.0, 450.0, 650.0],
+        "thresholds": [5000.0, 3600.0, 4400.0],
+    }
+    arm = {
+        "subthreshold": {
+            "resonant": True,
+            "f_res": 350.0,
+            "z_peak": 6.7,
+            "freqs": [20.0, 350.0, 500.0],
+            "z": [2.4, 6.7, 5.5],
+        },
+        "spike": {
+            **curve,
+            "resonant": True,
+            "f_best": 450.0,
+            "threshold": 3600.0,
+        },
+        "epsg": {
+            **curve,
+            "resonant": False,
+            "f_best": 450.0,
+            "threshold": 3600.0,
+        },
+    }
+    script["plot"]({"45-compartment (msoAxon.m)": arm}, tmp_path / "r.png")
+    sub, spike, epsg = figs[0].axes
+    diamonds = [ln for ln in sub.lines if ln.get_marker() == "D"]
+    assert [(ln.get_xdata()[0], ln.get_ydata()[0]) for ln in diamonds] == [
+        (350.0, 6.7)
+    ]
+    assert not [ln for ln in epsg.lines if ln.get_marker() == "D"]
+    # plain tick labels on the log axes, no 6 x 10^3
+    spike.figure.canvas.draw()
+    labels = [t.get_text() for t in spike.get_yticklabels(minor=True)]
+    assert all("times" not in t and "^" not in t for t in labels)
+    mpl.pyplot.close(figs[0])
+
+
+def test_somatic_draw_aligns_and_brackets_the_amplitude():
+    script = _script("somatic_spike.py")
+    t = np.linspace(4.8, 8.0, 321)
+    v = -68 + 40 * np.exp(-(((t - 5.5) / 0.1) ** 2))
+
+    def case(amp):
+        return {
+            "rheobase_pA": 3800.0,
+            "spikes": [
+                {
+                    "multiple": 1.5,
+                    "amplitude": amp,
+                    "t_inflection": 5.3,
+                    "v_inflection": -50.0,
+                    "trace": {"t_ms": list(t), "soma_mV": list(v)},
+                }
+            ],
+        }
+
+    names = list(script["CASES"])
+    fig = script["draw"]({names[0]: case(22.0), names[1]: case(30.0)})
+    a0, a1 = fig.axes
+    assert a0.get_xlim() == a1.get_xlim() == (-1.0, 2.0)  # aligned, shared
+    trace, bracket = a0.lines[0], a0.lines[1]
+    np.testing.assert_allclose(trace.get_xdata()[0], 4.8 - 5.3)
+    np.testing.assert_allclose(trace.get_ydata().max(), -28 + 50)
+    assert list(bracket.get_ydata()) == [0, 22.0]  # the JSON's amplitude
+    assert bracket.get_xdata()[0] == pytest.approx(0.2, abs=0.01)  # the peak
+    # Scott et al 2005: a 17 +- 2 mV band, and lines for dendrotoxin
+    band = a0.patches[0]
+    assert (band.get_y(), band.get_y() + band.get_height()) == (15.0, 19.0)
+    refs = [ln for ln in a1.lines if ln.get_linestyle() in ("--", ":")]
+    assert sorted(ln.get_ydata()[0] for ln in refs) == [15.0, 37.0]
+    mpl.pyplot.close(fig)
+
+
+def test_dendrites_e_marks_the_half_windows():
+    script = _script("dendrites.py")
+    E = {
+        "model EPSG (0.18 ms)": {"margin_0.005": 60.0, "margin_0.03": 166.0},
+        "Myoga EPSG (0.3 ms)": {"margin_0.005": 70.0, "margin_0.03": 182.0},
+    }
+    assert [x for x, _ in script["window_marks"](E)] == [83.0, 91.0]

@@ -277,9 +277,9 @@ def threshold(
         `ceiling` spikes.
 
     Raises:
-        ValueError: If rel_tol or guess is not > 0 (checked before any
-            run, a Relative criterion's included), or if events is a
-            plain tuple and delay is not 0.
+        ValueError: If rel_tol, guess or a float criterion is not > 0
+            (checked before any run, a Relative criterion's included),
+            or if events is a plain tuple and delay is not 0.
         _bisect.FiresWithoutInputError: If the cell fires with no input.
     """
     _bisect.check_positive("rel_tol", rel_tol)
@@ -440,7 +440,13 @@ def half_width(
     Returns:
         The width [ms], or nan if the crossing lies beyond the delays
         given.
+
+    Raises:
+        ValueError: If margin is not >= 0 (a level below the coincident
+            threshold has no crossing on the rising curve).
     """
+    if not margin >= 0:
+        raise ValueError(f"margin must be >= 0, got {margin!r}")
     delays, thresholds = (
         np.asarray(delays, float),
         np.asarray(thresholds, float),
@@ -483,9 +489,11 @@ def window(
     that input stops spiking. The width is twice that delay.
 
     It measures the same thing as
-    half_width(delays, threshold_curve(...), margin), but needs ~15 +
-    ~14 runs instead of ~15 per delay of the curve, and has no linear
-    interpolation between grid points. It assumes a single boundary:
+    half_width(delays, threshold_curve(...), margin), but needs one
+    threshold search and one delay search (about 20 runs in all at the
+    default tolerances, PYTHON.md) instead of a threshold search per
+    delay of the curve, and has no linear interpolation between grid
+    points. It assumes a single boundary:
     once the threshold curve rises above (1 + margin) * th0 it stays
     above. Every saved curve does (their only dips are <0.1% of th0, on
     the plateau at about twice th0).
@@ -528,10 +536,13 @@ def window(
         delay).
 
     Raises:
-        ValueError: If delay_tol is not > 0, or rel_tol is not > 0 when
-            th0 is searched for (checked before any run), or if
+        ValueError: If margin or delay_tol is not > 0, or rel_tol is not
+            > 0 when th0 is searched for (checked before any run), or if
             threshold0 is given with events, dt_inh or inh.
     """
+    # at margin <= 0 the input need not spike at delay 0, which the delay
+    # search below assumes
+    _bisect.check_positive("margin", margin)
     _bisect.check_positive("delay_tol", delay_tol)
     source = _source(
         events, dt_inh, inh, tau=epsg_tau, node=input_node, node2=input_node2
@@ -752,8 +763,9 @@ def window_edges(
         all of lo, hi and best are nan if nothing fires.
 
     Raises:
-        ValueError: If delay_tol or rel_tol is not > 0.
+        ValueError: If margin, delay_tol or rel_tol is not > 0.
     """
+    _bisect.check_positive("margin", margin)
     _bisect.check_positive("delay_tol", delay_tol)
     _bisect.check_positive("rel_tol", rel_tol)
     source = synaptic.as_source(events)
@@ -1256,9 +1268,12 @@ def resolve_criterion(
 
     Raises:
         _bisect.FiresWithoutInputError: See spike_height().
-        ValueError: See spike_height().
+        ValueError: If a float criterion is not > 0 (the searches
+            predict from log(peak / criterion)); see also
+            spike_height().
     """
     if not isinstance(criterion, Relative):
+        _bisect.check_positive("criterion", criterion)
         return criterion
     return criterion.fraction * spike_height(
         model,
