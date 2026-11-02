@@ -795,6 +795,7 @@ def threshold_figure(
         ceiling,
         label="Two-Compartment",
         color=COLOURS["two"],
+        ls="--",  # so the 45-compartment curve shows where they agree
     )
     if hit.any():
         ax.axhline(
@@ -812,4 +813,200 @@ def threshold_figure(
         ylabel=units("Threshold", unit) if unit else "Threshold",
     )
     ax.legend()
+    return fig
+
+
+def threshold_residual(
+    multi: np.ndarray | Sequence[float],
+    two: np.ndarray | Sequence[float],
+    ceiling: float | None = None,
+) -> np.ndarray:
+    """Returns the two-compartment model's thresholds relative to the 45's.
+
+    Args:
+        multi: The 45-compartment thresholds.
+        two: The two-compartment thresholds at the same points.
+        ceiling: The search's ceiling: a point where either model found no
+            threshold has no residual (nan).
+
+    Returns:
+        (two - multi) / multi in percent, per point.
+    """
+    m, t = np.asarray(multi, dtype=float), np.asarray(two, dtype=float)
+    r = (t - m) / m * 100
+    if ceiling is not None:
+        r[ceiling_mask(m, ceiling) | ceiling_mask(t, ceiling)] = np.nan
+    return r
+
+
+def mark_minimum(
+    ax: matplotlib.axes.Axes,
+    x: np.ndarray | Sequence[float],
+    values: np.ndarray | Sequence[float],
+    unit: str,
+    ceiling: float | None = None,
+    label: bool = True,
+    **kw: Any,
+) -> int | None:
+    """Marks a curve's interior minimum with a labelled marker.
+
+    A minimum at either end of the sweep is no optimum (the sweep may just
+    stop there), and ceiling points are no thresholds, so neither is
+    marked.
+
+    Args:
+        ax: The panel.
+        x: What the sweep varies (as drawn).
+        values: The thresholds.
+        unit: x's unit, for the label.
+        ceiling: The search's ceiling, or None.
+        label: Write "min <x> <unit>" above the marker.
+        **kw: Passed to ax.plot for the marker (its colour).
+
+    Returns:
+        The index marked, or None.
+    """
+    x, v = np.asarray(x, dtype=float), np.asarray(values, dtype=float)
+    if ceiling is not None:
+        v = np.where(ceiling_mask(v, ceiling), np.nan, v)
+    if len(v) < 3 or np.isnan(v).all():
+        return None
+    i = int(np.nanargmin(v))
+    if i in (0, len(v) - 1):
+        return None
+    ax.plot(x[i], v[i], marker="v", ms=6, mec="k", ls="none", **kw)
+    if label:
+        _min_label(ax, x[i], v[i], f"min {x[i]:g} {_GLYPHS.get(unit, unit)}")
+    return i
+
+
+def _min_label(ax: matplotlib.axes.Axes, x: float, y: float, text: str) -> None:
+    """Writes a minimum's label above it, in the curve's valley."""
+    ax.annotate(
+        text,
+        (x, y),
+        xytext=(0, 8),
+        textcoords="offset points",
+        ha="center",
+        va="bottom",
+        fontsize=6,
+    )
+
+
+def threshold_grid(
+    panels: dict[str, dict[str, Any]], nodes: Sequence[int]
+) -> matplotlib.figure.Figure:
+    """Draws every threshold sweep for every node, with residual strips.
+
+    One column per stimulus and one row per node; the nodes of a column
+    share their y limits, so their curves compare by eye. Under each panel
+    a strip shows the two-compartment model's difference from the
+    45-compartment one, in percent (threshold_residual). Ceiling points
+    are hollow markers (plot_thresholds) and, where a panel asks for it,
+    each model's interior minimum is marked (mark_minimum).
+
+    Args:
+        panels: Per stimulus: title, xlabel, x_unit, x_scale (x as drawn
+            is x times this), unit, ceiling, resolution, mark_min, x, and
+            thresholds[str(node)] = dict(multi=..., two=...).
+        nodes: The nodes, one row each, top to bottom.
+
+    Returns:
+        The figure.
+    """
+    stims = list(panels)
+    fig = figure("double", height=0.6 + 2.3 * len(nodes))
+    gs = fig.add_gridspec(
+        2 * len(nodes), len(stims), height_ratios=[3, 1] * len(nodes)
+    )
+    for j, stim in enumerate(stims):
+        p = panels[stim]
+        x = np.asarray(p["x"], dtype=float) * p.get("x_scale", 1)
+        first = first_res = res = None
+        for i, node in enumerate(nodes):
+            ax = fig.add_subplot(gs[2 * i, j], sharey=first)
+            res = fig.add_subplot(gs[2 * i + 1, j], sharex=ax, sharey=first_res)
+            first, first_res = first or ax, first_res or res
+            t = p["thresholds"][str(node)]
+            hit = plot_thresholds(
+                ax,
+                x,
+                t["multi"],
+                p["ceiling"],
+                label="45-compartment",
+                color=COLOURS["multi"],
+            )
+            hit |= plot_thresholds(
+                ax,
+                x,
+                t["two"],
+                p["ceiling"],
+                label="2-compartment",
+                color=COLOURS["two"],
+                ls="--",
+            )
+            if hit.any():
+                ax.axhline(
+                    p["ceiling"],
+                    color=GREY,
+                    ls=":",
+                    lw=0.8,
+                    label="no threshold below the ceiling",
+                )
+            if p.get("mark_min"):
+                at = {
+                    model: mark_minimum(
+                        ax,
+                        x,
+                        t[model],
+                        p["x_unit"],
+                        p["ceiling"],
+                        label=False,
+                        color=COLOURS[model],
+                    )
+                    for model in ("multi", "two")
+                }
+                if None not in at.values():  # one label for both markers
+                    u = _GLYPHS.get(p["x_unit"], p["x_unit"])
+                    im, it = at["multi"], at["two"]
+                    text = (
+                        f"min {x[im]:g} {u}"
+                        if im == it
+                        else f"min 45: {x[im]:g}, 2: {x[it]:g} {u}"
+                    )
+                    y = min(t["multi"][im], t["two"][it])
+                    _min_label(ax, x[im], y, text)
+            ax.set_title(f"{p['title']}, node {node}")
+            ax.set_ylabel(units("Threshold", p["unit"]))
+            ax.tick_params(labelbottom=False)
+            res.axhline(0, color=GREY, lw=0.6)
+            res.plot(
+                x,
+                threshold_residual(t["multi"], t["two"], p["ceiling"]),
+                marker="o",
+                ms=2,
+                color=COLOURS["two"],
+            )
+            res.set_ylabel("2 vs 45\n(%)")
+            if i < len(nodes) - 1:
+                res.tick_params(labelbottom=False)
+        res.set_xlabel(units(p["xlabel"], p["x_unit"]))
+    handles, labels = fig.axes[0].get_legend_handles_labels()
+    for ax in fig.axes:  # the ceiling line may be in any panel
+        for h, lab in zip(*ax.get_legend_handles_labels(), strict=True):
+            if lab not in labels:
+                handles.append(h)
+                labels.append(lab)
+    fig.legend(handles, labels, loc="outside lower center", ncol=3)
+    notes = sorted(
+        {
+            f"{p['resolution']:g} {p['unit']}"
+            for p in panels.values()
+            if p.get("resolution") is not None
+        }
+    )
+    fig.suptitle(
+        "Spiking thresholds, 45- vs 2-compartment model"
+        + (f" (search resolution {', '.join(notes)})" if notes else "")
+    )
     return fig

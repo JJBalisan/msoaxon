@@ -72,6 +72,18 @@ or return a meaningless result, and the golden traces are bit-identical.
   Legends that covered data moved below their panels; every axis names its
   unit, with µs, µm and MΩ glyphs (`plotting.glyphs`), and EPSG
   thresholds are in nS per EPSG. Display only (#138).
+- `making_threshold_graphs.py` writes the 2 x 4 composite
+  `thresholds_overview.png` (and PDF, JSON) as its main output: one column
+  per stimulus, one row per `--node` (now repeatable, default 3 and 5),
+  the rows of a column on one y axis, a residual strip under each panel
+  ((two - multi) / multi in percent, `plotting.threshold_residual`), and
+  the ramp's and sine's optima marked (`plotting.mark_minimum`). It is
+  drawn by `plotting.threshold_grid`. The single panels need
+  `--per-stimulus`. `SWEEPS` entries are a `Sweep` named tuple carrying
+  the units; the EPSG-pair delay is drawn in µs, as in the coincidence
+  figures, and the two-compartment curve is dashed so the
+  45-compartment curve shows where they agree. Same thresholds, same
+  search (#140).
 
 ### Fixed
 

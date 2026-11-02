@@ -47,7 +47,7 @@ def assert_replots(script, json_path):
     and it records the run that made it.
     """
     copy = json_path.parent / "replot" / json_path.name
-    copy.parent.mkdir()
+    copy.parent.mkdir(exist_ok=True)
     copy.write_text(json_path.read_text())
     run_script(script, "--replot", copy)
     shapes = [
@@ -242,6 +242,9 @@ def test_making_threshold_graphs_script(tmp_path):
         "sine",
         "--points",
         1,
+        "--node",
+        3,
+        "--per-stimulus",
         "--out-dir",
         tmp_path,
     )
@@ -249,7 +252,7 @@ def test_making_threshold_graphs_script(tmp_path):
     # 11541.14, see test_analysis.py). One flipped search decision (~1.8) can
     # carry 11054.08 past 11055 and round it to 11060, so compare within one
     # rounding step (rel 1e-3) rather than the printed text
-    multi = re.search(r"sine: multi=\[([0-9.]+)\]", out)
+    multi = re.search(r"sine node 3: multi=\[([0-9.]+)\]", out)
     two = re.search(r"two  =\[([0-9.]+)\]", out)
     assert float(multi[1]) == pytest.approx(11054.08, rel=1e-3)
     assert float(two[1]) == pytest.approx(11541.14, rel=1e-3)
@@ -260,6 +263,18 @@ def test_making_threshold_graphs_script(tmp_path):
     assert res["ceiling"] == 15000 and res["resolution"] == 10
     assert_replots(
         "making_threshold_graphs.py", tmp_path / "sine_thresholds_cpt3.json"
+    )
+    # the composite, the main output (#140)
+    res = json.loads((tmp_path / "thresholds_overview.json").read_text())
+    assert res["nodes"] == [3] and list(res["panels"]) == ["sine"]
+    sine = res["panels"]["sine"]
+    assert sine["thresholds"]["3"] == {
+        "multi": [float(multi[1])],
+        "two": [float(two[1])],
+    }
+    assert sine["unit"] == "pA" and sine["x_unit"] == "Hz"
+    assert_replots(
+        "making_threshold_graphs.py", tmp_path / "thresholds_overview.json"
     )
 
 
