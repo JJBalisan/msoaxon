@@ -80,20 +80,21 @@ def test_somatic_spike_is_mature_and_klt_sets_it():
 
 
 # rheobases at rel_tol 1e-4 (CHANGELOG 1.2.0), so the multiples are exact
-RHEOBASE = {"multi": 3784.1, "two": 3846.0}
+RHEOBASE = {"multi": 3784.1, "two": 3850.9}
 # PYTHON.md "Somatic spike" table: mV at 1.5x, 2x and 3x rheobase
 TABLE = {
     "multi": {1.5: 7.4, 2.0: 13.3, 3.0: 18.2},
-    "two": {1.5: 6.4, 2.0: 13.0, 3.0: 17.8},
+    "two": {1.5: 6.3, 2.0: 12.9, 3.0: 17.4},
 }
 # Per-point tolerance [mV], from rerunning each point with the fine rerun's
 # max_step at 0.003, 0.004, 0.006 and 0.007 instead of 0.005 (exact mode),
 # rounded up from the measured spread. multi and the dendrotoxin row: spread
-# under 0.0001 mV at every point. two: 0.06 at 1.5x (6.372 to 6.435), 0.00 at
-# 2x, 0.20 at 3x (17.576 to 17.775), which is why those two get more than 0.06.
+# under 0.0001 mV at every point. two: 6.349 to 6.410 at 1.5x, 12.855 to 12.967
+# at 2x (one step size lands on the higher value) and 17.418 at 3x, so the first
+# two get more than 0.06 around their rounded table values.
 TOLERANCE = {
     "multi": {1.5: 0.06, 2.0: 0.06, 3.0: 0.06},
-    "two": {1.5: 0.1, 2.0: 0.06, 3.0: 0.25},
+    "two": {1.5: 0.12, 2.0: 0.08, 3.0: 0.06},
 }
 
 

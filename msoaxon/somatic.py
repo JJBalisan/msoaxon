@@ -115,7 +115,7 @@ def fires(
             coincidence.Relative fraction of the spike height.
         model_kw: Further model keywords, as in coincidence.threshold():
             mode, morph, model_type, max_step, or r1/tau_est for "two"
-            (Goldwyn 2019: v0=-58, r1=8.5, tau_est=0.34).
+            (Goldwyn 2019: v0=-58, r1=8.5, tau_est=0.34, gKHT=0).
         events: Drive the cell with an event list instead of the step
             (an event tuple, or a source called with delay 0: see
             coincidence.threshold()), its peaks scaled by `I`: a train

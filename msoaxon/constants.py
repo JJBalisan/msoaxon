@@ -251,8 +251,8 @@ def taua(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
 # --- Conductance fractions at rest -------------------------------------------
 def _fractions(
     v_rest: float = V_REST_REF,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Returns the KLT, h and Na fractions of the resting conductance."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Returns the KLT, h, Na and KHT fractions of the resting conductance."""
     h = G_H * ainf(v_rest)
     na = na_open(minf(v_rest), hinf(v_rest), G_NA)
     kht = G_KHT * pinf(v_rest)
@@ -263,10 +263,10 @@ def _fractions(
     def frac(g: np.ndarray) -> np.ndarray:
         return np.where(total != 0, g / safe, 0.0)
 
-    return frac(klt), frac(h), frac(na)
+    return frac(klt), frac(h), frac(na), frac(kht)
 
 
-KLT_FRAC, H_FRAC, NA_FRAC = _fractions()
+KLT_FRAC, H_FRAC, NA_FRAC, KHT_FRAC = _fractions()
 
 
 # --- Geometry -----------------------------------------------------------------

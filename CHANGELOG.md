@@ -8,9 +8,23 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
-`membrane()` gets the knobs for the cell-to-cell diversity the papers name
-(#82) and `multi.with_axon` the axon geometry (#81); every default is today's
-literal, so no published number moves and the golden traces are bit-identical.
+The two-compartment model's KHT is corrected, so its published numbers move a
+little and 17 of its golden traces with them; the 45-compartment model's do not.
+`membrane()` also gets the knobs for the cell-to-cell diversity the papers name
+(#82) and `multi.with_axon` the axon geometry (#81); their defaults are today's
+literals, so those two move nothing.
+
+### Fixed
+
+- `two.py`'s `gKHT` comes from the resting fractions like every other
+  conductance: KHT's 0.46% share of the 45-compartment soma's resting conductance,
+  823 nS at -68 mV and 156 nS at -58 mV, not `TwoCpt.m`'s 0.0114 nS, a probable
+  slip that left KHT with no effect. The leak gives up that share and KHT's current
+  at rest is subtracted, so the conductances still sum to the total and rest stays
+  at `v0`. Rheobase goes from 3846 to 3851 pA and from 1961 to 1963 pA at -58 mV,
+  the coincident threshold from 47.72 to 47.76 nS, the 3% window from 199.0 to
+  198.9 µs and the somatic spike at 2× from 13.0 to 12.9 mV. `TwoCpt.m` is
+  unchanged.
 
 ### Added
 
@@ -34,6 +48,8 @@ literal, so no published number moves and the golden traces are bit-identical.
   No MSO Q10 has been measured: the defaults 3 and 2 are Rothman & Manis 2003's.
 - `constants.minf`, `ainf` and the six `tau*` functions take the midpoint,
   slope or rate factor as optional arguments.
+- `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0: the
+  parts of their paper read for this describe Na and KLT only.
 
 ## 1.10.0 (2 Nov 2026)
 
