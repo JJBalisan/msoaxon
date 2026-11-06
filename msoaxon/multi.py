@@ -724,6 +724,26 @@ def _check_channel_knobs(knobs: dict[str, float], morph: Morphology) -> None:
             raise ValueError(f"{name} must be > 0, got {value}")
 
 
+def _applied_scales(key: Any) -> tuple[float, float]:
+    """Returns the h and conductance scales a morphology key already holds.
+
+    Args:
+        key: Morphology.key, in which _scale_channels and klt_to_leak nest
+            the key they copied from.
+
+    Returns:
+        (ih_density_scale, conductance), each 1.0 if none was applied.
+    """
+    ih, conductance = 1.0, 1.0
+    if isinstance(key, tuple):
+        if key and key[0] == "channels":
+            ih, conductance = float(key[2]), float(key[4])
+        for item in key:
+            inner_ih, inner_c = _applied_scales(item)
+            ih, conductance = ih * inner_ih, conductance * inner_c
+    return ih, conductance
+
+
 def _scale_channels(
     morph: Morphology,
     ih_density_scale: float,
@@ -747,7 +767,23 @@ def _scale_channels(
 
     Returns:
         morph, or the copy.
+
+    Raises:
+        ValueError: If morph already holds a temperature's densities, or
+            already holds an h scale and another is asked for: the new
+            membrane's gates or densities would not match it.
     """
+    held_ih, held_conductance = _applied_scales(morph.key)
+    if held_conductance != 1.0:
+        raise ValueError(
+            "morph already holds a temperature's densities; build from the "
+            "original morphology, or pass the first membrane as mem="
+        )
+    if held_ih != 1.0 and ih_density_scale != 1.0:
+        raise ValueError(
+            "morph already holds an ih_density_scale; build from the "
+            "original morphology"
+        )
     if (
         ih_density_scale == 1.0
         and dendrite_kht_scale == 0.0
@@ -856,16 +892,20 @@ def membrane(
         ih_density_scale: Multiplies gh in every compartment. Baumann
             et al 2013 (Front Neural Circuits 7:117) found Ih largest
             in ventral, high-frequency cells.
-        ih_vhalf: The h activation midpoint [mV] (Baumann et al 2013's
-            default, -80.4); it moves along the frequency map too.
+        ih_vhalf: The h activation midpoint [mV] (default -80.4, Baumann
+            et al 2013's fit for dorsal, low-frequency cells); it moves
+            along the frequency map too. Their ventral fit also has a
+            different slope and time-constant shape, which this and
+            ih_tau_scale cannot reach.
         ih_tau_scale: Multiplies the h activation time constant, on top
             of the temperature factor. Baumann et al 2013: fastest in
             high-frequency cells.
         na_act_vhalf: The Na activation midpoint [mV], in every
-            compartment (default: -46, Scott et al 2010). Together with
-            na_act_slope it sets the subthreshold-oscillation regime of
-            Bondy et al 2021 (J Neurosci 41:6234); the inactivation
-            midpoint is soma_na_vhalf.
+            compartment (default: -46, Scott et al 2010). With
+            na_act_slope it is for exploring the Na-driven subthreshold
+            oscillations of Bondy et al 2021 (J Neurosci 41:6234), who
+            did not report values for either; the inactivation midpoint
+            is soma_na_vhalf.
         na_act_slope: The Na activation slope factor k [mV], positive
             (default: 11).
         dendrite_kht_scale: gKHT in the dendrite compartments
@@ -897,9 +937,11 @@ def membrane(
         A Membrane with key, morph_key, morph, g_na, g_klt, na_vhalf,
         vlk, y0_gates (None unless rebalance_rest), v_rest (None
         unless the rebalanced rest is not uniform) and the Na
-        activation, h and rate settings. With ih_density_scale or
-        dendrite_kht_scale set, morph is a copy with its own key (as
-        for klt_to_leak): pass mem alone, or morph=mem.morph.
+        activation, h and rate settings. With ih_density_scale,
+        dendrite_kht_scale or a temperature other than 35 set, morph is
+        a copy with its own key (as for klt_to_leak): pass mem alone to
+        mso_axon, or mem with morph=mem.morph. Do not build another
+        membrane from that copy with the same scaling.
 
     Raises:
         ValueError: If dendrite_klt_scale or dendrite_kht_scale is set
@@ -1544,8 +1586,8 @@ def mso_axon(
     mem = mem or membrane(v0, morph=morph)
     if mem.morph_key != morph.key:
         raise ValueError(
-            "mem was built for a different morphology; "
-            "pass morph= to membrane()"
+            "mem was built for a different morphology; pass morph= to "
+            "membrane(), and mem alone or with morph=mem.morph here"
         )
     n = morph.n
     y0 = initial_state(morph, mem, v0)

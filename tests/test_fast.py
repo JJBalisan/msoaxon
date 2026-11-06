@@ -156,6 +156,7 @@ def configs():
         "na_act_slope": 8.5,
         "temperature": 27.0,
         "q10": 2.4,
+        "q10_conductance": 1.3,
     }
     # the morph is each mem's own: ih_density_scale and dendrite_kht_scale
     # live in mem.morph, so only it carries them into either right-hand side

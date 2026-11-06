@@ -345,3 +345,38 @@ def test_dendrite_kht_needs_real_dendrites_not_just_extra_compartments():
     extra = dataclasses.replace(multi.LUMPED, n=46)
     with pytest.raises(ValueError, match="dendrite_kht_scale"):
         multi.membrane(-68.0, morph=extra, dendrite_kht_scale=1.0)
+
+
+@pytest.mark.parametrize(
+    "again", [{"temperature": 25.0}, {}, {"soma_klt_scale": 2.0}]
+)
+def test_a_temperatures_morphology_cannot_build_another_membrane(again):
+    a = multi.membrane(-68.0, temperature=25.0)
+    with pytest.raises(ValueError, match="temperature's densities"):
+        multi.membrane(-68.0, morph=a.morph, **again)
+
+
+def test_a_temperatures_morphology_cannot_run_without_its_membrane():
+    a = multi.membrane(-68.0, temperature=25.0)
+    with pytest.raises(ValueError, match="temperature's densities"):
+        multi.mso_axon(
+            "step", 2, 4, 0.0, 3, "active-full", 3, -68.0, 1, morph=a.morph
+        )
+    t, _ = multi.mso_axon(
+        "step", 2, 4, 0.0, 3, "active-full", 3, -68.0, 1, mem=a, morph=a.morph
+    )
+    assert t[-1] == 3
+
+
+def test_a_second_ih_scale_is_refused():
+    a = multi.membrane(-68.0, ih_density_scale=2.0)
+    with pytest.raises(ValueError, match="ih_density_scale"):
+        multi.membrane(-68.0, morph=a.morph, ih_density_scale=2.0)
+
+
+def test_the_error_for_a_plain_morphology_says_what_to_pass():
+    a = multi.membrane(-68.0, morph=D, temperature=25.0)
+    with pytest.raises(ValueError, match="morph=mem.morph"):
+        multi.mso_axon(
+            "step", 2, 4, 0.0, 3, "active-full", 3, -68.0, 1, mem=a, morph=D
+        )

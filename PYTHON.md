@@ -864,14 +864,20 @@ than the spike.
     `q10 ** ((temperature − 35) / 10)`, on top of the Q10 factors `constants.py`
     already holds for `taup` and `taua`, and every voltage-gated density is
     multiplied by `q10_conductance ** ((temperature − 35) / 10)`. These are the
-    two values Rothman & Manis 2003 suggested, as summarised by Manis et al.
-    2019, who add that no data directly support them. 35 °C is `msoAxon.m`'s, so
-    it changes no bit whatever the Q10s. The leak and the synaptic kinetics take
-    no Q10. No MSO Q10 has been measured, so both are assumptions, not data.
+    two values Rothman & Manis 2003 suggested for scaling to 38 °C, as summarised
+    by Manis & Campagnola 2018, who add that no data directly support them;
+    applying the second to every voltage-gated density is this repo's reading.
+    35 °C is `msoAxon.m`'s, so it changes no bit whatever the Q10s. The leak and
+    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so both are
+    assumptions, not data. Slower conduction also takes spike-site search past
+    `initiation.py`'s `LEAD`, tuned to the default 0.35-0.4 ms: below about 30 °C
+    the reported sites are wrong unless `lead` is raised to match.
 
   The densities live in the morphology (as `klt_to_leak`'s leak does), so a
-  `mem` built with `ih_density_scale` or `dendrite_kht_scale` carries its own
-  morphology copy: pass `mem` alone, or `morph=mem.morph`. All three modes
+  `mem` built with `ih_density_scale`, `dendrite_kht_scale` or a temperature
+  other than 35 °C carries its own morphology copy: pass `mem` alone, or `mem`
+  with `morph=mem.morph`. `membrane()` refuses a copy that already holds a
+  temperature's densities, or a second `ih_density_scale`. All three modes
   honour every knob: the numbers the Rust right-hand side already takes from
   Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
   `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
