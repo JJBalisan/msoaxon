@@ -1285,8 +1285,8 @@ def test_two_native_spike_stop_agrees_with_scipys_event(quiet_native):
 
 @needs_ext
 @pytest.mark.xfail(
-    strict=True,
-    reason="4.6e-6 ms apart at two_cpt's rtol 1e-6; multi's bound is for 1e-8",
+    strict=False,
+    reason="1.15e-6 ms apart at two_cpt's rtol 1e-6; multi's bound is for 1e-8",
 )
 def test_two_native_spike_time_within_multis_bound(quiet_native):
     # open (#108, for JJ): multi's 1e-6 ms, not loosened

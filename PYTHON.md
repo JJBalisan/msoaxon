@@ -444,7 +444,7 @@ the 45-compartment model: every two-compartment golden trace passes in fast and
 native, but at 151 interpolated samples a few runs (`tests/test_fast.py`,
 `TWO_DRIFT`) sit either side of rtol 1e-4 / atol 5e-3 mV at one point on an
 upstroke (the sine at the soma is 1.24× over, 0.0134 mV), and a spike stop lands
-4.6e-6 ms from scipy's. Against an exact run at rtol 1e-10 both modes are off by
+1.15e-6 ms from scipy's. Against an exact run at rtol 1e-10 both modes are off by
 the same order at their own steps (exact 0.0087 to 0.0284 mV, native 0.0083 to
 0.0212), and at 1e-8 the four runs are within tolerance. Run as the default,
 native also moves three pinned results outside their tests' tolerances (the
