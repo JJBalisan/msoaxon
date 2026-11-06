@@ -50,6 +50,13 @@ literals, so those two move nothing.
   slope or rate factor as optional arguments.
 - `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0: the
   parts of their paper read for this describe Na and KLT only.
+- `PYTHON.md` has a model description per model (45-compartment,
+  two-compartment, dendritic variant): the shared gates and currents, then
+  every parameter with its value, units and source, read from the code, in
+  the manner of Nordlie, Gewaltig & Plesser 2009. One "Agreement contract"
+  paragraph states the cross-platform tolerance and cites Lopes et al. 2022;
+  the passages that said it piecemeal now point to it. Docs only, no result
+  moves. Refs #86.
 
 ## 1.10.0 (2 Nov 2026)
 
