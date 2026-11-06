@@ -33,6 +33,61 @@ same version as the package, bumped in the same release PR.
   a state at rest. The first stop time now follows the step it chose. No
   golden trace moved (#108).
 
+## 1.11.0 (6 Nov 2026)
+
+The two-compartment model's KHT is corrected, so its published numbers move a
+little and 17 of its golden traces with them; the 45-compartment model's do not.
+`membrane()` also gets the knobs for the cell-to-cell diversity the papers name
+(#82) and `multi.with_axon` the axon geometry (#81); their defaults are today's
+literals, so those two move nothing. `PYTHON.md` gains model-description tables
+and one agreement contract (#86).
+
+### Fixed
+
+- `two.py`'s `gKHT` comes from the resting fractions like every other
+  conductance: KHT's 0.46% share of the 45-compartment soma's resting conductance,
+  823 nS at -68 mV and 156 nS at -58 mV, not `TwoCpt.m`'s 0.0114 nS, a probable
+  slip that left KHT with no effect. The leak gives up that share and KHT's current
+  at rest is subtracted, so the conductances still sum to the total and rest stays
+  at `v0`. Rheobase goes from 3846 to 3851 pA and from 1961 to 1963 pA at -58 mV,
+  the coincident threshold from 47.72 to 47.76 nS, the 3% window from 199.0 to
+  198.9 µs and the somatic spike at 2× from 13.0 to 12.9 mV. `TwoCpt.m` is
+  unchanged.
+
+### Added
+
+- `multi.with_axon(...)`, a `Morphology` builder for the axon geometry that
+  `constants.py` folds into `SA`, `cap` and `g_ax`: internode length,
+  diameter, node length, AIS length and start, myelin capacitance, per-pair
+  `internode_scale` and `node_scale` vectors for distal shortening, and
+  `hold_ld` to hold or free L/d. At the defaults every array is bit-identical
+  to `LUMPED`'s (pinned in `tests/test_axon_geometry.py`), so no number and
+  no golden trace moves. `ais_start > 0` inserts a hillock and the numbering
+  stays physical, so every later compartment moves up by one and the analyses
+  warn that their default `node=3` is then the proximal AIS. Python only; Rust
+  still takes the arrays. The sweeps in #81 stay open.
+- `membrane(ih_density_scale=, ih_vhalf=, ih_tau_scale=)` for the h current's
+  density, half-activation and time constant, `na_act_vhalf=` and
+  `na_act_slope=` for the Na activation curve, `dendrite_kht_scale=` for KHT
+  in the dendrites (a multiple of the somatic density, the same along them as
+  in Nabel et al. 2019; the default 0 keeps them without), and `temperature=`
+  with `q10=` and `q10_conductance=`: Q10 factors on every gate's time constant
+  and every voltage-gated density, relative to the model's 35 C. Fast and native
+  modes honour all of them through the gating constants and arrays they already
+  take (`rust/` is unchanged). `Membrane.key` and `describe()` carry the knobs.
+  No MSO Q10 has been measured: the defaults 3 and 2 are Rothman & Manis 2003's.
+- `constants.minf`, `ainf` and the six `tau*` functions take the midpoint,
+  slope or rate factor as optional arguments.
+- `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0, since
+  Goldwyn's model has none.
+- `PYTHON.md` has a model description per model (45-compartment,
+  two-compartment, dendritic variant): the shared gates and currents, then
+  every parameter with its value, units and source, read from the code, in
+  the manner of Nordlie, Gewaltig & Plesser 2009. One "Agreement contract"
+  paragraph states the cross-platform tolerance and cites Lopes et al. 2022;
+  the passages that said it piecemeal now point to it. Docs only, no result
+  moves. Refs #86.
+
 ## 1.10.0 (2 Nov 2026)
 
 The figures are redrawn to one style (#137): paper-width PNG plus PDF,

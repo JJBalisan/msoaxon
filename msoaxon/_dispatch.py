@@ -3,11 +3,35 @@
 The analysis functions pick the model with model="multi" / "two".
 """
 
+import warnings
 from typing import Any
 
 import numpy as np
 
 from msoaxon import _solve, multi, synaptic, two
+
+
+def _warn_if_proximal_ais(
+    model: str,
+    node: int,
+    mem: multi.Membrane | None,
+    morph: multi.Morphology | None,
+) -> None:
+    """Warns when the analyses' default site is not the distal AIS.
+
+    The analyses default to node 3, the distal AIS of the 45-compartment chain.
+    A hillock moves everything after the soma up by one, so 3 is then the
+    proximal AIS, which has a much smaller spike and a higher threshold.
+    """
+    if model != "multi" or node != 3:
+        return
+    shape = morph or (mem.morph if mem is not None else None)
+    if shape and "hillock" in shape.labels:
+        warnings.warn(
+            "node 3 is the proximal AIS on a morphology with a hillock; the "
+            "distal AIS, the analyses' default site, is node 4 there",
+            stacklevel=3,
+        )
 
 
 def run_model(
@@ -59,6 +83,7 @@ def run_model(
             only in the multi-compartment model, so they are not
             silently dropped).
     """
+    _warn_if_proximal_ais(model, node, mem, morph)
     if model == "multi":
         return multi.mso_axon(
             stim,
@@ -311,6 +336,15 @@ _MEMBRANE_KEY = (
     "rebalance_rest",
     "dendrite_klt_scale",
     "axon_rest",
+    "ih_density_scale",
+    "ih_vhalf",
+    "ih_tau_scale",
+    "na_act_vhalf",
+    "na_act_slope",
+    "dendrite_kht_scale",
+    "temperature",
+    "q10",
+    "q10_conductance",
 )
 
 

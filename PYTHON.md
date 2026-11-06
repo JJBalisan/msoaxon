@@ -1,11 +1,12 @@
 # Python port
 
 A numpy/scipy port of the MATLAB model comparison. The Python package is the
-reference: its results, pinned by `tests/test_golden.py`, are the ones the
-analyses below use, on any hardware. The `.m` files are the historical original
-it was ported from. They stay in the repo, untouched, but the Python no longer
-has to match them: where this page says the port reproduces the MATLAB, that
-describes how it was built, not a promise for future changes.
+reference: its results, pinned by `tests/test_golden.py` to the tolerance in
+"Agreement contract" below, are the ones the analyses below use. The `.m` files
+are the historical original it was ported from. They stay in the repo,
+untouched, but the Python no longer has to match them: where this page says
+the port reproduces the MATLAB, that describes how it was built, not a promise
+for future changes.
 
 ```bash
 uv sync                                                    # or: uv sync --extra fast (Rust, below)
@@ -58,6 +59,189 @@ Code that isn't a port of a MATLAB file:
 | `msoaxon/resonance.py` | soma impedance, sine-train and EPSG-train thresholds over frequency (#83) |
 | `msoaxon/_fast.py` | the optional Rust right-hand side: mode selection, self-check, `DriftWarning` |
 | `rust/` | the `msoaxon-fast` extension (PyO3, built by maturin): `multi._rhs` and `two._rhs` in Rust |
+
+## Agreement contract
+
+Two runs of these models agree when they match the golden traces
+(`tests/golden_traces.json`) to `rtol=1e-4, atol=5e-3` mV, with the final time
+`t_last` equal to `t_end` exactly (`tests/test_golden.py`). That tolerance is
+the same on every platform, and it is the only cross-platform promise: a
+different libm, SIMD `exp`/`pow`, BLAS or compiler rounds in the last bits, the
+adaptive solver then takes slightly different steps, and the difference grows
+through a spike upstroke. Lopes et al. 2022
+([doi](https://doi.org/10.3389/fninf.2022.874234)) found the same in a
+Hodgkin-Huxley network at double precision: no two implementations matched
+across operating systems and languages, and only builds with the same compiler
+reproduced each other. Bit-identity is therefore a single-platform test, not a
+contract: `"fast"` equals `"exact"` bit for bit on darwin-arm64 only
+(`tests/test_fast.py`), `"native"` is never bit-identical to either, and it is
+judged by the golden traces and by `scripts/benchmark_search.py --check` (0
+flipped spike decisions). The first `"fast"` run in a process issues a
+`DriftWarning` saying whether the port was bit-identical on that machine.
+Moving a published number beyond the golden tolerance is a new minor version
+at least (CHANGELOG).
+
+## Model descriptions
+
+One table set per model, in the spirit of Nordlie, Gewaltig & Plesser 2009
+([doi](https://doi.org/10.1371/journal.pcbi.1000456)): what the model is, then
+every parameter with its value and where the value comes from. Everything below
+was read from the code (`msoaxon/constants.py`, `multi.py`, `two.py`,
+`synaptic.py`, `_common.py`), not from the papers, so where a paper and the code
+differ the code is described. Source "code" means the value is in the code with
+no citation; "derived" means the code computes it from the rows above it.
+Units are mV, ms, nS, pF, µm, µF/cm² and Ω·cm unless a row says otherwise.
+Compartments are 1-indexed, as in the MATLAB.
+
+### Shared channels and gates
+
+Both models use the same gating functions (`msoaxon/constants.py`). V is in
+mV. Each gate relaxes as dx/dt = (x∞(V) - x) / τx(V).
+
+| Channel, gate | Steady state x∞(V) | Time constant τ(V) | Source |
+|---|---|---|---|
+| Na, m | 1 / (1 + exp((V + 46) / -11)) | (0.141 - 0.0826 / (1 + exp((-20.5 - V) / 10.8))) / 3 | Scott et al. 2010 (x∞, τ as in `msoAxon.m`; `TwoCpt.m` credits Rothman & Manis 2003 for τ) |
+| Na, h | 1 / (1 + exp((V + 62.5) / 7.77)) | (4 - 3.74 / (1 + exp((-40.6 - V) / 5.05))) / 3 | Scott et al. 2010 |
+| KHT, p | 1 / (1 + exp(-(V + 23) / 6)) | 3^(-1.3) (100 / (4 exp((V + 60) / 32) + 5 exp(-(V + 60) / 22)) + 5) | Rothman & Manis 2003, without their slow gate; 22 to 35 °C with Q10 = 3 |
+| KLT, w | 1 / (1 + exp((V + 57.34) / -11.7)) | 21.5 / (6 exp((V + 60) / 7) + 24 exp(-(V + 60) / 50.6)) + 0.35 | Mathews et al. 2010 |
+| KLT, z | 0.73 / (1 + exp((V + 67) / 6.16)) + 0.27 | 170 / (5 exp((V + 60) / 10) + exp(-(V + 70) / 8)) + 10.7 | Mathews et al. 2010 |
+| h current, a | 1 / (1 + exp(0.1 (V + 80.4))) | 3^(-0.3) (79 + 417 exp(-(V + 61.5)² / 800)) | Baumann et al. 2013; 32 to 35 °C with Q10 = 3 |
+
+Currents, as `multi._rhs` writes them (`two._rhs` is the same with the Na,
+KLT and h currents' value at rest subtracted; KHT and leak are not, below):
+
+| Current | Expression | Reversal |
+|---|---|---|
+| Na | g_Na m⁴ (0.993 h + 0.007) (V - E_Na) | E_Na = 69 mV (code) |
+| KHT | g_KHT p (V - E_K) | E_K = -90 mV (code) |
+| KLT | g_KLT w⁴ z (V - E_K) | E_K = -90 mV (code) |
+| h | g_h a (V - E_h) | E_h = -35 mV (code) |
+| Leak | g_lk (V - E_lk) | E_lk = v0 (the resting potential; code) |
+
+The 0.007 is the non-inactivating Na fraction (code). The h current is linear
+in the activation gate, as in Rothman & Manis 2003, since neither Lehnert et
+al. 2014 nor Baumann et al. 2013 give a power (code comment). `model_type`
+acts differently in the two models. In `mso_axon`, it only freezes gates
+(`multi.ACTIVE_GATES`): a gate that is off holds `_GATE0` and its channel still
+conducts at that fixed open fraction, so `"passive"` is not leak-only. In
+`two_cpt`, every gate evolves (z alone is frozen, always) and a switched-off
+channel has conductance 0 (`two.get_params`).
+
+### 45-compartment model (`multi.mso_axon`, `msoAxon.m`)
+
+| Item | Value | Source |
+|---|---|---|
+| Type | Conductance-based, unbranched cable, Hodgkin-Huxley-style channels | Lehnert et al. 2014 (equations, unless the code notes otherwise) |
+| Compartments | 45: 1 soma, 2 AIS, then 21 internode-node pairs (4 = internode, 5 = node, ...) | `Constants.m` |
+| State | 315 = 45 × [V, m, h, p, w, z, a], column-major | code |
+| Initial state | V = v0 everywhere; (m, h, p, w, z, a) = (0.12, 0.67, 0.0, 0.28, 0.67, 0.22), the steady state at -68 mV rounded to two decimals, so the far axon drifts about 0.9 mV (compartment 45; the soma moves under 0.3 mV) | `msoAxon.m` (`_GATE0`) |
+| Rest | `membrane(rebalance_rest=True)` instead sets each leak reversal so the soma rests at v0 from steady-state gates, and the axon at `axon_rest` (default -68 mV) | code |
+| Default analysis v0 | -68 mV | code |
+| Integration | scipy BDF, RTOL = ATOL = 1e-8, max step 0.1 t_end, restarted at stimulus on and off times | `msoAxon.m` (`ode15s` options) |
+| Input | Current density [pA/µm²] into `input_node`; see "Stimuli" below | `msoAxon.m` |
+
+Per-compartment geometry and densities (`constants.py`, `multi.py`). Channel
+densities are in nS/µm²:
+
+| Parameter | Soma (1) | AIS (2, 3) | Internode (4, 6, ...) | Node (5, 7, ...) | Source |
+|---|---|---|---|---|---|
+| Membrane area SA [µm²] | 8750 | 36.14 (2), 20.73 (3) | 207.3 (π 100 · 0.66) | 2.073 (π · 1 · 0.66) | `Constants.m`; SA(2) uses 1.66/3 where 0.66/2 was probably meant (see "Quirks kept on purpose") |
+| Length L [µm] | 52.78 (√(SA/π), a cylinder as long as the sphere's diameter) | 10, 10 | 100 | 1 | `Constants.m` |
+| Cross-section XA [µm²] | derived: π (SA / 2πL)² | derived | derived | derived | `Constants.m` |
+| Capacitance [µF/cm²] | 0.8 | 0.8 | 0.01 | 0.8 | code |
+| g_Na | 0.2 | 4 | 0 | 4 | Lehnert et al. 2014 Table 2 |
+| g_KHT | 0.1 | 0 | 0 | 0 | Lehnert et al. 2014 Table 2 |
+| g_KLT | 1.55 | 1.55 | 0 | 1.55 | Lehnert et al. 2014 Table 2 |
+| g_h | 0.02 | 0.02 | 0 | 0 | Lehnert et al. 2014 Table 2 |
+| g_lk | 0.0005 | 0.0005 | 0.0002 | 0.05 | Lehnert et al. 2014 Table 2 |
+
+Between neighbours i and i + 1 the axial conductance is
+(2 / R_a) / (L_i / XA_i + L_{i+1} / XA_{i+1}) with R_a = 100 Ω·cm (code). The
+fractions of the resting conductance that are KLT, h and Na
+(`constants.KLT_FRAC`, `H_FRAC`, `NA_FRAC`, computed at -68 mV) are not inputs
+to this model; the two-compartment model reads them (below).
+
+`membrane()` changes the channel set without changing the rows above:
+
+| Argument | Default | Effect |
+|---|---|---|
+| `soma_klt_scale`, `ais_klt_scale`, `dendrite_klt_scale` | 1.0 | Multiply g_KLT in that region (Scott et al. 2005; Mathews et al. 2010) |
+| `soma_na_vhalf` | -62.5 mV | Somatic Na inactivation midpoint; -77 measured by Scott et al. 2010 |
+| `rebalance_rest`, `axon_rest` | False, -68 mV | See "Rest" above |
+| `klt_to_leak` | None | `"chord"` or `"slope"`: KLT replaced by a leak (Mikiel-Hunter et al. 2016) |
+
+### Two-compartment model (`two.two_cpt`, `TwoCpt.m`)
+
+Soma (1) coupled to one axon compartment (`node`, 2 to 45), after Goldwyn,
+Remme & Rinzel 2019. State: 11 = [V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2].
+Currents are in pA. Every Na, KLT and h current has its value at rest
+subtracted, so the model has no rest drift; z is held at z∞(v0) and τz is
+unused; every gate starts at its exact steady state at v0. Integration: scipy
+BDF, RTOL = ATOL = 1e-6, max step 0.1 ms. Input: the soma if `input_node` is 1,
+else the axon compartment.
+
+The values below are `two.get_params(-68.0, node, 1, "active-full")`, which
+is what the golden traces and the analyses use for nodes 3 and 5.
+
+| Parameter | Node 3 | Node 5 | Source |
+|---|---|---|---|
+| r1, soma input resistance (passive) [MΩ] | 10 | 10 | `TwoCpt.m`; Goldwyn et al. 2019 give 8.5 (`two.GOLDWYN_2019`) |
+| τ_est, passive soma decay [ms] | 0.71 | 0.71 | `TwoCpt.m`; Goldwyn et al. 2019 give 0.34 |
+| couple12 (soma to axon) | 0.9762 | 0.779 | `Coupling.mat` (`data/coupling.json`, by node) |
+| couple21 (axon to soma) | 0.2931 | 0.029 | `Coupling.mat` |
+| area ratio, axon / soma | 0.002370 | 0.0002370 | derived: SA(node) / SA(1) |
+| g_C, coupling [nS] | 41.06 | 2.967 | derived: (1 / r1) couple21 / (1 - couple12 couple21) |
+| g_tot1, g_tot2 [nS] | 99.02, 1.001 | 99.34, 0.8417 | derived: g_C (1 / couple21 - 1), g_C (1 / couple12 - 1) |
+| τ1, τ2 [ms] | 0.5069, 0.004000 | 0.6940, 0.004417 | derived: τ_est (1 - couple12 couple21); τ1 · area ratio · couple12 / couple21 |
+| C1, C2 [pF] | 71.0, 0.1682 | 71.0, 0.01682 | derived: τ (g_tot + g_C) |
+| KLT fraction of rest conductance, soma, axon | 0.5787, 0.5574 | 0.5787, 0.1211 | derived: `constants.KLT_FRAC` at -68 mV; override with `klt1`, `klt2` |
+| h fraction, soma, axon | 0.3729, 0.3592 | 0.3729, 0 | derived: `H_FRAC`; `h1`, `h2` |
+| Na fraction, soma | 0.002255 | 0.002255 | derived: `NA_FRAC`; `na1` |
+| KHT fraction, soma | 0.004592 | 0.004592 | derived: `KHT_FRAC` |
+| g_KLT1, g_KLT2 [nS] | 12750, 124.1 | 12792, 22.69 | derived: fraction · g_tot / (w∞⁴ z∞) at v0 |
+| g_h1, g_h2 [nS] | 164.5, 1.602 | 165.1, 0 | derived: fraction · g_tot / a∞ at v0 |
+| g_lk1, g_lk2 [nS] | 4.113, 0.08353 | 4.126, 0.7398 | derived: (1 - sum of fractions) g_tot, the soma's also less KHT's share |
+| g_Na1 [nS] | 1645 | 1651 | derived: Na fraction · g_tot1 / (m∞⁴ (0.993 h∞ + 0.007)) at v0 |
+| g_Na2 [nS] | 119 | 25.5 | `TwoCpt.m`, calibrated for nodes 3 and 5 only, apparently at -68 mV; 140 for every other node |
+| g_KHT1 (soma only) [nS] | 822.6 | 825.3 | derived: KHT fraction · g_tot1 / p∞ at v0; not `TwoCpt.m`'s, see "Deliberate differences" |
+| E_Na, E_K (KLT and KHT), E_h, E_lk [mV] | 69, -90, -35, v0 | same | code |
+
+The Na inactivation midpoint, soma and axon, is -62.5 mV (`soma_na_vhalf`,
+`axon_na_vhalf`). The channel sets for each `model_type` are in `two._channels`
+and `two.get_params`. `'active-sodium'` gives no Na in this model (see "Quirks
+kept on purpose").
+
+### Dendritic variant (`multi.with_dendrites`)
+
+The 45-compartment model with two unbranched dendrites appended as
+compartments 46 to 55 (lateral 46 to 50, medial 51 to 55, proximal to distal),
+after Lehnert et al. 2014 (Fig. 8). The rows of the 45-compartment tables hold
+for compartments 1 to 45 except as listed here. Arguments and defaults:
+
+| Parameter | Default | Source |
+|---|---|---|
+| Dendrite length, diameter, segments per dendrite | 200 µm, 5 µm, 5 (40 µm each) | Lehnert et al. 2014 Fig. 8 |
+| Soma area | 2466.8 µm² = 8750 - 10 × π · 5 · 40 | "the somatic surface was reduced to 2467 µm²" (Lehnert et al. 2014); the dendrites take their membrane from the lumped soma |
+| Soma length | √(SA / π) of the new area | `Constants.m`'s rule |
+| Dendrite segment area | 628.3 µm² (π · 5 · 40), length 40 µm | derived |
+| Soma g_Na | 0.7094 nS/µm² (0.2 × 8750 / 2466.8), dendrites 0 | derived: total Na conserved; "no Na" in the dendrites by the paper |
+| g_KHT | soma 0.1, dendrites 0 | as the lumped model |
+| g_KLT and g_h in dendrite segment k | soma density × exp(-x_k / 74 µm), x_k = 20, 60, 100, 140, 180 µm | length constant from Mathews et al. 2010 (`klt_lambda`) |
+| `conserve_totals` | True | The paper does not say. True scales soma and dendrite KLT and h by one factor so their totals equal the lumped soma's: soma g_KLT 1.55 → 2.942, g_h 0.02 → 0.03796; dendrite g_KLT 2.245, 1.308, 0.7617, 0.4436, 0.2584; g_h 0.02897, 0.01688, 0.009829, 0.005724, 0.003334. False keeps the soma's Table 2 densities (dendrite g_KLT 1.183, 0.6890, 0.4013, 0.2337, 0.1361) and halves total KLT |
+| Dendrite g_lk, capacitance | 0.0005 nS/µm², 0.8 µF/cm² (the soma's) | code |
+| Dendrite R_a (`dendrite_ra`) | 100 Ω·cm (Mathews et al. 2010 used 200); the soma and axon keep 100 | code; see "Dendritic axial resistivity" |
+| Attachment | Compartment 46 and 51 connect to the soma (1); segments chain outward | code |
+| `dendrite_klt_scale` | 1.0 | Multiplies dendritic g_KLT (`membrane`) |
+| New stimulus `EPSGbilateral` | EPSG at `input_node` at `start`, at `input_node2` at `stop`; also runs on the lumped 45-compartment model, but `two_cpt` rejects it | code |
+
+### Stimuli
+
+| Stimulus | Parameters | Source |
+|---|---|---|
+| `EPSG`, `EPSGpair`, `EPSGbilateral`, `Events` | Unitary conductance g (e^(-t/τdecay) - e^(-t/τrise)) / peak, peak normalised to 1; `epsg_tau` = (0.1, 0.18) ms; reversal 0 mV; amplitude `I` in nS | Franken et al. 2015 waveform, as used in the MATLAB; Myoga et al. 2014 used a decay of 0.3 ms |
+| `Events` inhibition (`synaptic.ipsg`) | τ = (0.28, 1.5) ms, reversal -80 mV, 40 nS (papers span 30 to 60) | Roberts et al. 2013; Myoga et al. 2014; slice values |
+| `Synaptic`, `SynapticPair` | Gammatone-filtered, rectified noise convolved with an EPSG: `freq` 350 Hz, `gE` 1.3e7 (arbitrary units), `VsynE` 0 mV, seed 1396, `diff` 1.0 ms | `Synaptic.m` (numpy's RNG, so statistically equal to MATLAB's, not identical) |
+| `step`, `ramp`, `ramp2`, `sine` | Current `I` [pA]; sine at `f` = 200 Hz | `msoAxon.m`, `TwoCptODE.m`; windows differ between the models (table above `multi.external_current`) |
 
 ## Fast mode: the 45-compartment right-hand side in Rust
 
@@ -131,12 +315,10 @@ worker processes included (pools hand their workers the parent's setting).
 expression (`m**4` is `powf(4.0)`, not `powi`; `np.interp`'s fused multiply-add
 on arm64 is reproduced). On darwin-arm64, where numpy and Rust call the same
 libm, it is bit-identical to `multi._rhs`, and so are whole runs, thresholds and
-windows. On other hardware numpy may use its own SIMD `exp`/`pow` while Rust
-calls the system libm, so results can differ in the last bits; through a spike
-upstroke that grows to the size of the cross-platform drift the golden traces
-already tolerate. The first fast run in each process therefore checks the port
-against `multi._rhs` on 24 fixed states (about 5 ms) and issues a
-`msoaxon.DriftWarning` saying whether it was bit-identical on this machine.
+windows. Elsewhere it agrees to the golden tolerance ("Agreement contract").
+The first fast run in each process checks the port against `multi._rhs` on 24
+fixed states (about 5 ms) and issues a `msoaxon.DriftWarning` saying whether it
+was bit-identical on this machine.
 Silence it with
 
 ```python
@@ -208,12 +390,10 @@ end (`t_end` exactly) or the event. The integrator is built once per right-hand
 side and reused for every segment of the run.
 
 **Agreement.** Native's steps are diffsol's, not scipy's, so it is not bit for
-bit any other mode; at the same `RTOL = ATOL = 1e-8` it agrees with the
-reference within the solver tolerance. It is judged by the golden traces
-(`tests/test_golden.py` runs every multi case in native too, at rtol 1e-4 /
-atol 5e-3 mV and `t_last` exact, dendrite trees included) and by
-`uv run scripts/benchmark_search.py --check` (0 flipped spike decisions). The
-first native run in a process issues its own `msoaxon.DriftWarning` saying so.
+bit any other mode. It is judged as the contract says: `tests/test_golden.py`
+runs every multi case in native too, dendrite trees included, and
+`uv run scripts/benchmark_search.py --check` flips 0 spike decisions. The first
+native run in a process issues its own `msoaxon.DriftWarning` saying so.
 
 **Jacobian.** diffsol is given the pattern explicitly, not left to detect it:
 `core::tree_jac_sparsity` of the run's own morphology (the Rust twin of
@@ -341,7 +521,7 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
 - **Constants:** `Area.mat`, `Fractions.mat` and `Coupling.mat` match the Python
   values to 1e-12 (`tests/`).
 - **Rest:** with no input the 2-CPT model stays at `v0` to 1e-6 mV. The 45-CPT
-  model settles about 0.9 mV away from it. The same happens in MATLAB, since
+  model's far axon (compartment 45) settles about 0.9 mV away from it, the soma under 0.3 mV. The same happens in MATLAB, since
   `msoAxon.m` starts from rounded gating values and doesn't subtract resting
   currents.
 - **EPSGpair thresholds vs `EPSGpair_Thresholds*.jpg`:** every plotted value is
@@ -419,6 +599,18 @@ reference these are history; they are not reverted.
   compatibility no longer a goal nothing here needs the fit. The `.m` file stays
   as part of the historical record.
 
+- **`gKHT` in the 2-CPT model:** `TwoCpt.m` has `0.1 / SA(1) * 1000`, which is
+  0.0114 nS against about 1e4 nS of KLT beside it, a probable slip that left the
+  model's KHT with no effect. `two.py` calculates it as it does every other
+  conductance, from its share of the 45-compartment soma's resting conductance
+  (0.46%): at node 3 and 10 MΩ, 823 nS at −68 mV, close to that soma's 875 nS, and
+  156 nS at −58 mV.
+  The leak gives up that share and KHT's current at rest is subtracted, as Na's,
+  KLT's and h's are, so the resting conductances still sum to the total and rest
+  stays at `v0`. `gKHT=` replaces it, and `GOLDWYN_2019` sets 0, since Goldwyn's
+  model has none. Results labelled `TwoCpt.m` in this document and in the scripts
+  mean its calibration (10 MΩ, 0.71 ms, −68 mV) with this KHT.
+
 ## Quirks kept on purpose
 
 These are in the MATLAB and are reproduced unchanged. They were kept so that the
@@ -438,7 +630,13 @@ move the golden traces (`tests/golden_traces.json`) and the numbers here:
 - `TwoCpt.m` has calibrated axonal Na (`gNa2`) only for nodes 3 (119) and 5
   (25.5). Every other node gets the placeholder 140, so 2-CPT runs at those
   nodes use an uncalibrated value. `two_cpt(..., gNa2=...)`
-  replaces it.
+  replaces it. The calibration also looks to be for −68 mV, where 118 nS
+  reproduces the 45-compartment threshold at node 3 (`TwoCpt.m` doesn't say how it
+  got 119). At −58 mV the model recalibrates its other conductances but keeps 119
+  nS, as `GOLDWYN_2019` does: its threshold is 28.5 nS against the rebalanced
+  45-compartment model's 66.6 nS, which about 63 nS would match. That is threshold
+  only, and the two −58 mV cells differ for other reasons too (see "Somatic
+  spike"), so it stays at 119 nS.
 - `Spiking.m` doesn't clear `reset` between columns.
 - `SA(2)` uses `1.66/3` where `0.66/2` was probably meant. The stored `Area.mat`
   was built with it.
@@ -461,7 +659,7 @@ The 45-compartment model follows Lehnert et al. 2014
 model is the coupling-constant framework of Goldwyn, Remme & Rinzel 2019
 ([doi](https://doi.org/10.1371/journal.pcbi.1006476)).
 
-`TwoCpt.m` changes Goldwyn's passive targets:
+`TwoCpt.m` changes Goldwyn's passive targets and adds KHT:
 
 | | Goldwyn 2019 | `TwoCpt.m` |
 |---|---|---|
@@ -471,7 +669,10 @@ model is the coupling-constant framework of Goldwyn, Remme & Rinzel 2019
 
 The old values survive as comments beside the new ones (`%8.5`, `%-58`).
 `GOLDWYN_2019` in `msoaxon/two.py` restores them:
-`two_cpt(..., v0=-58, r1=8.5, tau_est=0.34)`.
+`two_cpt(..., v0=-58, r1=8.5, tau_est=0.34, gKHT=0)`. Goldwyn's model has no
+KHT; `TwoCpt.m`'s comes from Lehnert et al. 2014. The preset is those targets and
+no KHT, not Goldwyn's whole model, which has Na in the axon compartment only, no
+h and E_K −106 mV; it keeps `TwoCpt.m`'s h, somatic Na, `gNa2` and E_K.
 
 The coupling `node` looks up (forward and backward constants, the area ratio,
 the KLT and h fractions and the axonal Na conductance) is a default, not a
@@ -484,8 +685,9 @@ same bits as before.
 | `gC` | coupling conductance [nS]; replaces what `r1` and the constants give, so `r1` stays at its default | > 0 |
 | `couple12`, `couple21` | forward (soma → axon) and backward coupling constants | (0, 1) |
 | `area_ratio` | axon to soma area ratio (sets the axon's time constant and capacitance) | > 0 |
-| `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1 | [0, 1] |
+| `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1, less the soma's KHT share (0.46% at the default `gKHT`) | [0, 1] |
 | `gNa2` | axonal Na conductance [nS] | ≥ 0 |
+| `gKHT` | somatic KHT conductance [nS], for model types with KHT; default from its resting fraction; the leak gives up its resting conductance | ≥ 0 |
 | `soma_na_vhalf`, `axon_na_vhalf` | Na inactivation midpoint [mV] (default −62.5); see "Somatic spike" | finite |
 | `klt_to_leak` | replace the soma's and the axon's KLT by a leak that keeps rest: `"chord"` adds the KLT conductance at rest, `"slope"` the slope of the model's own steady-state KLT current (z frozen at rest); `None` keeps KLT. Scaled by `klt1`, `klt2`. See "Resonance" and "Inhibition" | `None`, `"chord"`, `"slope"` |
 
@@ -544,7 +746,7 @@ Measured the way Myoga et al. 2014 did in adult gerbil MSO at 35 °C
 | 2-compartment, `TwoCpt.m` | 199 µs | 217 µs |
 | 2-compartment, Goldwyn 2019 calibration | 167 µs | 182 µs |
 
-These widths use inputs 3% above threshold. At 0.5% they shrink to 70–91 µs. The
+These widths use inputs 3% above threshold. At 0.5% they shrink to 69–91 µs. The
 margin matters a lot, and the paper's "200 pS (~3%)" is ambiguous: 200 pS is
 closer to 0.5% of their 43 nS EPSGs.
 
@@ -556,7 +758,7 @@ How the widths are computed:
   there. About 20 simulations per window, within 0.5 µs of the same search at
   1e-7.
 - Both searches predict rather than halve. At the 10 mV criterion the peak of
-  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.8 mV at
+  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.6 mV at
   −1%, −0.1%, 0, +0.1%, +1% of threshold), so each run that doesn't spike says
   how close it came. That takes about 10 simulations per threshold on average
   (125 for the twelve benchmark thresholds, at most 13) instead of 15.
@@ -631,26 +833,30 @@ default):
 | Model | Spike height | 50% | Coincident threshold | 3% window | Rheobase (100 ms step) |
 |---|---|---|---|---|---|
 | 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.1 → 199.7 µs (−0.7%) | 3785 → 3852 pA (+1.8%) |
-| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.72 → 48.22 nS (+1.1%) | 199.0 → 198.0 µs (−0.5%) | 3848 → 3877 pA (+0.8%) |
-| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.5 → 166.9 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
+| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 198.9 → 197.9 µs (−0.5%) | 3851 → 3881 pA (+0.8%) |
+| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.2 → 166.5 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
-  217.5, 216.8 → 215.5 and 182.4 → 182.5 µs.
-- The 0.5% windows narrow by 0.5–0.7% for the 45-compartment and `TwoCpt.m`
+  217.5, 216.6 → 215.5 and 182.1 → 182.0 µs.
+- The 0.5% windows narrow by 0.5–0.9% for the 45-compartment and `TwoCpt.m`
   models.
+- The windows carry about 1 µs of solver jitter at production tolerance, so the
+  last digit is not a model effect. Goldwyn's moved by that much when `TwoCpt.m`'s
+  KHT was corrected, although its own KHT is negligible before and 0 after: its 3%
+  window is 167.22 µs before and 167.23 µs after at rtol 1e-9.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
   two models' criterion moves onto the steep upstroke, which raises their
-  thresholds 1.0–1.8% and narrows their windows by at most 0.75%: about 2 µs on
+  thresholds 1.0–1.8% and narrows their 3% windows by at most 0.75%: about 2 µs on
   200, inside the 0.5% vs 3% margin ambiguity above. Goldwyn still narrows the
-  window by about 17% (−16.7% at 10 mV, −16.4% at 50%).
+  window by about 17% (−16.8% at 10 mV, −16.6% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
   Goldwyn). The coincident thresholds move more: up to 3%, and Goldwyn's by −13%
   at 25%, where the criterion is below its takeoff.
 - Goldwyn's rheobase is the same 100 ms step run with its calibration
-  (`v0=-58, r1=8.5, tau_est=0.34`). `somatic.fires`, `response`, `rheobase` and
+  (`v0=-58, r1=8.5, tau_est=0.34, gKHT=0`). `somatic.fires`, `response`, `rheobase` and
   `spike_amplitude` take a `model_kw` dict like `coincidence.threshold`, so the
   2070 pA is
-  `somatic.rheobase("two", v0=-58, model_kw={"r1": 8.5, "tau_est": 0.34})`.
+  `somatic.rheobase("two", v0=-58, model_kw={"r1": 8.5, "tau_est": 0.34, "gKHT": 0})`.
   `model_kw` also carries `mode="exact"`, `morph`, `model_type` and `max_step`;
   `mem=` stays as a shorthand for `model_kw={"mem": ...}`.
 - The searches take about 7% more simulations at 50%: the interpolation still
@@ -666,7 +872,7 @@ Values are for the Python port.
 | Spike initiation site | AIS (compartment 3) for an EPSG pair at 1.25–3× threshold; under sustained input 0–36% of spikes start at node 1 or 2 where 50 or more spikes fired, 8% at 350 Hz and the default `gE` (`initiation.py`, #80) | AIS; 5–60% of spikes start at node 1 or 2 under sustained input (Lehnert 2014) |
 | Input resistance, active, at rest | 2.4 MΩ steady, ~4.7 MΩ peak with the leak rebalanced at −68 mV (`rebalance_rest=True`, as in the dendrites table); 2.5 / 4.8 MΩ for the default membrane, which settles at −68.13 mV where the conductances differ a little (`measure.passive_step`, #68) | 5 MΩ (Lehnert's model); ~7 MΩ measured |
 | Somatic spike, from inflection (100 ms step) | 7.4 / 13.3 / 18.2 mV at 1.5× / 2× / 3× rheobase | 17 ± 2 mV mature, 5–15 mV near threshold, graded |
-| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 354 Hz, Q 2.75) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
+| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 354 Hz, Q 2.76) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
 | Spike resonance: sine frequency with the lowest firing threshold | 428 Hz (2-compartment: 429 Hz) | 285 Hz (same model) |
 | EPSG-train threshold minimum: rate with the lowest threshold | 430 Hz (2-compartment: 420 Hz) | 317 Hz (same model, EPSC train) |
 
@@ -754,7 +960,7 @@ than the spike.
 |---|---|---|---|
 | 45-compartment (`msoAxon.m`) | 7.4 mV | 13.3 mV | 18.2 mV |
 | 45-compartment, KLT removed at soma + AIS, rest rebalanced (dendrotoxin) | 25.4 mV | 28.2 mV | 31.7 mV |
-| 2-compartment (`TwoCpt.m`) | 6.4 mV | 13.0 mV | 17.8 mV |
+| 2-compartment (`TwoCpt.m`) | 6.3 mV | 12.9 mV | 17.4 mV |
 
 - **The unmodified model already matches mature cells.** Lehnert et al. 2014
   report "∼10 mV" for their model too.
@@ -777,16 +983,17 @@ than the spike.
   d²V/dt², which lies on a solver sample, so it depends on where the solver put
   its steps. Rerunning with `max_step` 3, 4, 6 and 7 µs instead of 5 moves the
   dendrotoxin row by 0.00 mV and the multi rows by 0.00 mV; the 2-compartment
-  rows move by up to 0.06 mV (1.5×), 0.00 (2×) and 0.20 mV (3×) (remeasured in
-  exact mode: 6.372–6.435 and 17.576–17.775 mV; the other rows move by under
+  rows move by up to 0.06 mV (1.5×), 0.11 (2×) and 0.00 mV (3×) (remeasured in
+  exact mode: 6.349–6.410 and 12.855–12.967 mV; the other rows move by under
   0.0001 mV). `tests/test_somatic.py` gives each table point a tolerance from
-  its spread: 0.06 mV, but 0.1 and 0.25 mV for those two. Before
+  its spread: 0.06 mV, but 0.12 and 0.08 mV for those two. Before
   issue #56 the pick was the argmax of d²V/dt² of the linearly interpolated
   trace, a comb with a tooth at every solver step. The dendrotoxin row then
   moved 0.6–1.9 mV under the same changes (25.08 mV on macOS against 25.97 mV on
   Linux CI at 1.5×), and so did the controls (2-compartment 2× spread 12.8–17.6
   mV). The old control values (7.6 / 13.4 / 19.4 and 6.2 / 15.6 / 17.6 mV) were
-  single teeth of that comb: the 2-compartment 2× value is 13.0 mV, not 15.6.
+  single teeth of that comb: the 2-compartment 2× value was 13.0 mV, not 15.6.
+  That is before the `gKHT` correction, which moved it to 12.9 mV.
 - **Spikes driven by EPSG pairs** measure 9–11 mV at 2× threshold, against 8.5 ±
   1.3 mV in vivo (van der Heijden et al. 2013). Near threshold the EPSP and
   spike merge and the inflection is ambiguous.
@@ -836,10 +1043,10 @@ than the spike.
 
   | 2-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
-  | −68, −62.5 | 33% | 3846 pA | 2.43 MΩ | 588 µs | 199 µs | 6.4 / 13.0 / 17.8 mV |
-  | −68, −77 | 76% | 4426 pA | 2.39 MΩ | 577 µs | 191 µs | no inflection (peak 23.5 / 29.1 / 37.8) |
-  | −58, −62.5 | 64% | 1961 pA | 2.36 MΩ | 595 µs | 218 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
-  | −58, −77 | 92% | 2033 pA | 2.33 MΩ | 588 µs | 215 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
+  | −68, −62.5 | 33% | 3851 pA | 2.42 MΩ | 587 µs | 199 µs | 6.3 / 12.9 / 17.4 mV |
+  | −68, −77 | 76% | 4431 pA | 2.38 MΩ | 577 µs | 190 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
+  | −58, −62.5 | 64% | 1963 pA | 2.34 MΩ | 595 µs | 218 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
+  | −58, −77 | 92% | 2035 pA | 2.32 MΩ | 588 µs | 214 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
 
   - **Scott's V½ moves the rheobase and little else:** at −68 mV, −77 raises
     rheobase by 16% (45-compartment) and 15% (2-compartment), and moves Rin,
@@ -890,6 +1097,54 @@ than the spike.
   a positive real part, naming the compartments the growing mode lives in.
   `axon_rest=v0` rebalances the whole cable, which warns above about −60.5 mV.
 - `klt_to_leak`: replaces KLT by a leak, keeping rest (see Resonance below).
+- Gate knobs (#82), for the cell-to-cell diversity along the frequency map
+  that the papers name (Baumann et al. 2013; Bondy et al. 2021; Nabel et al.
+  2019), all defaulting to `msoAxon.m`'s literals so nothing moves:
+  - `ih_density_scale` (× gh everywhere), `ih_vhalf` (mV, default −80.4) and
+    `ih_tau_scale` (× the h activation time constant).
+  - `na_act_vhalf` (mV, default −46) and `na_act_slope` (mV, default 11): the
+    Na activation curve, the same in every compartment; the inactivation
+    midpoint stays `soma_na_vhalf`.
+  - `dendrite_kht_scale`: gKHT in the dendrites, the same along them, as a
+    multiple of the soma's 0.1 nS/µm² (default 0: KHT at the soma only, as in
+    Lehnert et al. 2014, so a multiple of their own density could not switch
+    it on). `with_dendrites()` morphologies only. Nabel et al. 2019 found
+    high-voltage-activated K channels more evenly spread than KLT, with clear
+    expression at distal dendrites, and modelled KHT with equal conductance in
+    every compartment: 0.5449 mS/cm² alongside KLT, a scale of about 0.054. The
+    gate stays Rothman & Manis's `pinf`, closed near rest; Nabel's own gate
+    activates near rest and is not modelled.
+  - `temperature` (°C, default 35), `q10` (default 3) and `q10_conductance`
+    (default 2): every gate's time constant is divided by
+    `q10 ** ((temperature − 35) / 10)`, on top of the Q10 factors `constants.py`
+    already holds for `taup` and `taua`, and every voltage-gated density is
+    multiplied by `q10_conductance ** ((temperature − 35) / 10)`. These are the
+    two values Rothman & Manis 2003 suggested for scaling to 38 °C, as summarised
+    by Manis & Campagnola 2018, who add that no data directly support them;
+    applying the second to every voltage-gated density is this repo's reading.
+    35 °C is `msoAxon.m`'s, so it changes no bit whatever the Q10s. The leak and
+    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so both are
+    assumptions, not data. Slower conduction also takes spike-site search past
+    `initiation.py`'s `LEAD`, tuned to the default 0.35-0.4 ms: below about 30 °C
+    the reported sites are wrong unless `lead` is raised to match.
+
+  The densities live in the morphology (as `klt_to_leak`'s leak does), so a
+  `mem` built with `ih_density_scale`, `dendrite_kht_scale` or a temperature
+  other than 35 °C carries its own morphology copy: pass `mem` alone, or `mem`
+  with `morph=mem.morph`. `membrane()` refuses a copy that already holds a
+  temperature's densities, or a second `ih_density_scale`. All three modes
+  honour every knob: the numbers the Rust right-hand side already takes from
+  Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
+  `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
+  every knob off its default, each config using its own `mem.morph`.
+  `describe()` names them.
+
+  The curve and density knobs (`na_act_*`, `ih_*`, `dendrite_kht_scale`)
+  move the model's rest. Without `rebalance_rest=True` the gates start at
+  `msoAxon.m`'s literals, so a model type that freezes a gate ignores the
+  matching knob (`na_act_*` in a frozen-m model) and the cell can drift from
+  `v0` or fire at zero input. Pair them with `rebalance_rest=True`, which
+  re-balances the leak at the new gates and keeps rest at `v0`.
 
 The defaults are `msoAxon.m`'s membrane, unchanged.
 
@@ -897,7 +1152,7 @@ The defaults are `msoAxon.m`'s membrane, unchanged.
 
 `uv run scripts/resonance.py` reproduces this; `figures/resonance/` gets the
 curves and a JSON. `--quick` is a smoke test, `--mode native` is about 8× faster
-and agrees within solver tolerance.
+and agrees to the cross-platform contract (`rtol=1e-4`, `atol=5e-3` mV).
 
 Mikiel-Hunter, Kotak & Rinzel 2016
 ([doi](https://doi.org/10.1371/journal.pcbi.1005166)) give three frequencies for
@@ -937,7 +1192,7 @@ width against a resonance, a mismatch of measure.
 | 45-compartment, rest rebalanced | 2.4 MΩ | 367 Hz, 2.82 | 439 Hz | 446 Hz |
 | 45-compartment, KLT frozen at its resting conductance (`klt_to_leak="chord"`) | 9.1 MΩ | none (low-pass) | none (rises with frequency) | none (falls to 800 Hz) |
 | 45-compartment, KLT replaced by its slope conductance (`klt_to_leak="slope"`) | 2.6 MΩ | none (Q 1.00) | none (2% dip at 154 Hz) | none (flat) |
-| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.75 | 429 Hz | 420 Hz |
+| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.76 | 429 Hz | 420 Hz |
 
 What it shows:
 
@@ -1121,6 +1376,34 @@ replaced by an equal leak at rest (`membrane(klt_to_leak="chord")`: each
 compartment's KLT conductance at rest added to its leak), and for the
 two-compartment model with KLT present and with the same substitution
 (`two_cpt(klt_to_leak="chord")`).
+
+## Axon geometry
+
+`mso_axon(..., mem=membrane(..., morph=with_axon(...)))` makes the axon's
+geometry a knob. `with_axon()` takes `internode_length` (100 µm), `diameter`
+(0.66 µm), `node_length` (1 µm), `ais_length` (20 µm, two equal compartments),
+`ais_start` (0), `myelin_cap` (0.01 µF/cm²), `internode_scale` and `node_scale`
+(a scalar or one multiplier per internode/node pair, for distal shortening) and
+`hold_ld` (True multiplies the internode length by `diameter / 0.66`, so L/d
+stays at `internode_length / 0.66`, 100 / 0.66 at the default length; False
+leaves it free). At the defaults it
+returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
+
+Choices to know: channel densities are per µm², so a longer node holds more
+channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
+(scaled with `diameter / 0.66`), so its frustum area is not exact for any
+diameter; `ais_start > 0` inserts a hillock between the soma and the AIS (the
+AIS's leak, KLT and h densities, no Na or KHT), a modelling choice rather than a
+measured one. The numbering stays physical: the hillock is compartment 2, the
+AIS 3-4 and the last node 46, so a site keeps its label but its number moves up
+by one against `ais_start=0`. The analyses' default `node=3` is the distal AIS at
+`ais_start=0` and the proximal AIS beyond it, which changes threshold by 11% and
+spike height by 58%, so they warn: compare `node=4` there, and go by
+`Morphology.labels` across a sweep. `spiking()` and the plots still read the
+45-compartment layout, so they are not valid on a hillock chain. Longer axons
+also take the spike-site search past `initiation.py`'s `LEAD`, tuned to the
+default 0.35-0.4 ms conduction: raise `lead` with the conduction time. Axial
+resistivity stays 100 Ω·cm.
 
 ## Dendrites
 

@@ -158,7 +158,7 @@ def test_spiking_rejects_unknown_model_names(model):
 # EPSGpair thresholds on the grid of the repo's EPSGpair_Thresholds_CPT*.jpg
 # (making_threshold_graphs.py --only EPSGpair --jpg-grid), delays 0-0.6 ms.
 # The halving search only returns multiples of Q, so its output is pinned
-# exactly: the closest true threshold to any probe is 8.5e-4 relative away,
+# exactly: the closest true threshold to any probe is of order 1e-4 away,
 # against ~1e-14 drift across platforms and modes. The jpg column is the
 # MATLAB value read off the plot, kept as history; 20 of 28 match and the
 # other 8 are one output (2Q) away (PYTHON.md, "Validation").
