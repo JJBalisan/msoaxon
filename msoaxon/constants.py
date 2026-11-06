@@ -39,16 +39,20 @@ G_LK = np.concatenate([[0.0005, 0.0005, 0.0005], _alternating(0.0002, 0.05)])
 # gives them (Lehnert et al 2014 used the same channel models).
 
 
-def minf(V: np.ndarray | float) -> np.ndarray | float:
+def minf(
+    V: np.ndarray | float, vhalf: float = 46.0, k: float = -11.0
+) -> np.ndarray | float:
     """Na activation: Scott et al 2010.
 
     Args:
         V: Membrane potential [mV].
+        vhalf: The negated midpoint [mV] (default: -46 mV).
+        k: The slope factor, negative [mV] (default: -11 mV).
 
     Returns:
         The steady-state open fraction.
     """
-    return 1.0 / (1.0 + np.exp((V + 46.0) / -11.0))
+    return 1.0 / (1.0 + np.exp((V + vhalf) / k))
 
 
 def hinf(V: np.ndarray | float, vhalf: float = 62.5) -> np.ndarray | float:
@@ -127,103 +131,121 @@ def zinf(V: np.ndarray | float) -> np.ndarray | float:
     return (1 - 0.27) / (1.0 + np.exp((V + 67.0) / 6.16)) + 0.27
 
 
-def ainf(V: np.ndarray | float) -> np.ndarray | float:
+def ainf(V: np.ndarray | float, vhalf: float = 80.4) -> np.ndarray | float:
     """Activation of the h current: Baumann et al 2013.
 
     Args:
         V: Membrane potential [mV].
+        vhalf: The negated midpoint [mV] (default: -80.4 mV).
 
     Returns:
         The steady-state open fraction.
     """
-    return 1.0 / (1.0 + np.exp(0.1 * (V + 80.4)))
+    return 1.0 / (1.0 + np.exp(0.1 * (V + vhalf)))
 
 
 # --- Gating time constants [ms] at 35 C, shared by both models ---------------
 # The expressions follow msoAxon.m and TwoCpt.m term for term, and the golden
 # traces pin the results. The 2-CPT model holds z at rest and never uses tauz.
+#
+# Every time constant takes a rate factor q (default 1.0), the Q10 factor of
+# membrane()'s temperature knob: q > 1 is faster, and q = 1.0 leaves every bit
+# unchanged (x / 1.0 == x). The factor is applied where the Rust right-hand
+# side can apply it with the numbers it already takes (rust/src/core.rs): it
+# multiplies taum's and tauh's divisor, divides taup's and taua's temperature
+# factor, and divides the numerator and constant of tauw and tauz. Keep
+# _fast._gating in step.
 _P_TEMP = 3 ** ((22 - 35) / 10)  # Q10 of 3 from 22 C
 _A_TEMP = 3 ** ((32 - 35) / 10)  # Q10 of 3 from 32 C
 
 
-def taum(V: np.ndarray | float) -> np.ndarray | float:
+def taum(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """Na activation: Scott et al 2010 in msoAxon.m.
 
     TwoCpt.m credits Rothman-Manis.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above).
 
     Returns:
         The time constant [ms].
     """
-    return (0.141 + (-0.0826 / (1 + np.exp((-20.5 - V) / 10.8)))) / 3
+    return (0.141 + (-0.0826 / (1 + np.exp((-20.5 - V) / 10.8)))) / (3 * q)
 
 
-def tauh(V: np.ndarray | float) -> np.ndarray | float:
+def tauh(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """Na inactivation: Scott et al 2010.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above).
 
     Returns:
         The time constant [ms].
     """
-    return (4 + (-3.74 / (1 + np.exp((-40.6 - V) / 5.05)))) / 3
+    return (4 + (-3.74 / (1 + np.exp((-40.6 - V) / 5.05)))) / (3 * q)
 
 
-def taup(V: np.ndarray | float) -> np.ndarray | float:
+def taup(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """KHT activation: Rothman & Manis 2003, 22 C adjusted to 35 C.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above).
 
     Returns:
         The time constant [ms].
     """
-    return _P_TEMP * (
+    return (_P_TEMP / q) * (
         100 / (4 * np.exp((V + 60) / 32) + 5 * np.exp(-(V + 60) / 22)) + 5
     )
 
 
-def tauw(V: np.ndarray | float) -> np.ndarray | float:
+def tauw(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """KLT activation: Mathews et al 2010.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above).
 
     Returns:
         The time constant [ms].
     """
-    return (
-        21.5 / (6 * np.exp((V + 60) / 7) + 24 * np.exp(-(V + 60) / 50.6)) + 0.35
-    )
+    return (21.5 / q) / (
+        6 * np.exp((V + 60) / 7) + 24 * np.exp(-(V + 60) / 50.6)
+    ) + 0.35 / q
 
 
-def tauz(V: np.ndarray | float) -> np.ndarray | float:
+def tauz(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """KLT inactivation: Mathews et al 2010.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above).
 
     Returns:
         The time constant [ms].
     """
-    return 170 / (5 * np.exp((V + 60) / 10) + np.exp(-(V + 70) / 8)) + 10.7
+    return (170 / q) / (
+        5 * np.exp((V + 60) / 10) + np.exp(-(V + 70) / 8)
+    ) + 10.7 / q
 
 
-def taua(V: np.ndarray | float) -> np.ndarray | float:
+def taua(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     """Activation of the h current: Baumann et al 2013.
 
     Measured at 32 C, adjusted to 35 C.
 
     Args:
         V: Membrane potential [mV].
+        q: The rate factor (see above); membrane()'s Ih time-constant
+            scale divides it.
 
     Returns:
         The time constant [ms].
     """
-    return _A_TEMP * (79 + 417 * np.exp(-((V + 61.5) ** 2) / 800))
+    return (_A_TEMP / q) * (79 + 417 * np.exp(-((V + 61.5) ** 2) / 800))
 
 
 # --- Conductance fractions at rest -------------------------------------------

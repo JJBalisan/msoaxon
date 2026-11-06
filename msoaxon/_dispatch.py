@@ -302,6 +302,14 @@ _MEMBRANE_KEY = (
     "rebalance_rest",
     "dendrite_klt_scale",
     "axon_rest",
+    "ih_density_scale",
+    "ih_vhalf",
+    "ih_tau_scale",
+    "na_act_vhalf",
+    "na_act_slope",
+    "dendrite_kht_scale",
+    "temperature",
+    "q10",
 )
 
 

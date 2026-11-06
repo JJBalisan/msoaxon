@@ -842,6 +842,31 @@ than the spike.
   a positive real part, naming the compartments the growing mode lives in.
   `axon_rest=v0` rebalances the whole cable, which warns above about −60.5 mV.
 - `klt_to_leak`: replaces KLT by a leak, keeping rest (see Resonance below).
+- Gate knobs (#82), for the cell-to-cell diversity along the frequency map
+  that the papers name (Baumann et al. 2013; Bondy et al. 2021; Nabel et al.
+  2019), all defaulting to `msoAxon.m`'s literals so nothing moves:
+  - `ih_density_scale` (× gh everywhere), `ih_vhalf` (mV, default −80.4) and
+    `ih_tau_scale` (× the h activation time constant).
+  - `na_act_vhalf` (mV, default −46) and `na_act_slope` (mV, default 11): the
+    Na activation curve, the same in every compartment; the inactivation
+    midpoint stays `soma_na_vhalf`.
+  - `dendrite_kht_scale`: gKHT in the dendrites as a multiple of the soma's
+    0.1 nS/µm² (default 0: the dendrites have no KHT, so a multiple of their
+    own density could not switch it on). `with_dendrites()` morphologies only.
+  - `temperature` (°C, default 35) and `q10` (default 3): every gate's time
+    constant is divided by `q10 ** ((temperature − 35) / 10)`, on top of the
+    Q10 factors `constants.py` already holds for `taup` and `taua`. 35 °C is
+    `msoAxon.m`'s, so it changes no bit whatever the `q10`. Conductances and
+    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so the 3
+    is an assumption, not data.
+
+  The densities live in the morphology (as `klt_to_leak`'s leak does), so a
+  `mem` built with `ih_density_scale` or `dendrite_kht_scale` carries its own
+  morphology copy: pass `mem` alone, or `morph=mem.morph`. All three modes
+  honour every knob: the numbers the Rust right-hand side already takes from
+  Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
+  `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
+  every knob off its default. `describe()` names them.
 
 The defaults are `msoAxon.m`'s membrane, unchanged.
 
