@@ -302,8 +302,10 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
   20 of 28 values exactly. The other 8 are one possible output away (2q ≈ 2.3
   units, 2.5–5%). The curve shapes, the steep rise between 0.2 and 0.5 ms, and
   the plateau positions all agree. The misses aren't random: node-5
-  two-compartment sits one step low at four consecutive delays, and the node-3
-  multi-compartment plateau is 94.9 vs 97.3. `tests/test_coverage.py` pins all
+  two-compartment sits one step low at three consecutive delays, and the node-3
+  multi-compartment plateau is 94.9 vs 97.3. The jpgs predate the `gKHT`
+  correction (see "Deliberate differences"); it swapped which two 2-compartment
+  points match, not how many. `tests/test_coverage.py` pins all
   28 Python values, with the jpg values alongside.
   - Tightening the tolerances 1000× (1e-9, `max_step` 0.02) doesn't move any
     Python value, so the Python side is converged. The gap is either ode15s
@@ -371,6 +373,13 @@ reference these are history; they are not reverted.
   compatibility no longer a goal nothing here needs the fit. The `.m` file stays
   as part of the historical record.
 
+- **`gKHT` in the 2-CPT model:** `TwoCpt.m` has `0.1 / SA(1) * 1000`, which is
+  0.0114 nS against the 45-compartment soma's 0.1 nS/µm² × 8750 µm² = 875 nS, a
+  probable slip that left the model's KHT with no effect (12,750 nS of KLT sits
+  beside it). `two.py` uses 875 nS, and subtracts KHT's current at rest as it does
+  Na's, KLT's and h's, so rest stays at `v0`. `gKHT=` replaces it, and
+  `GOLDWYN_2019` sets 0, since Goldwyn's model has no KHT.
+
 ## Quirks kept on purpose
 
 These are in the MATLAB and are reproduced unchanged. They were kept so that the
@@ -423,7 +432,8 @@ model is the coupling-constant framework of Goldwyn, Remme & Rinzel 2019
 
 The old values survive as comments beside the new ones (`%8.5`, `%-58`).
 `GOLDWYN_2019` in `msoaxon/two.py` restores them:
-`two_cpt(..., v0=-58, r1=8.5, tau_est=0.34)`.
+`two_cpt(..., v0=-58, r1=8.5, tau_est=0.34, gKHT=0)`. Goldwyn's model has no
+KHT; `TwoCpt.m`'s comes from Lehnert et al. 2014.
 
 The coupling `node` looks up (forward and backward constants, the area ratio,
 the KLT and h fractions and the axonal Na conductance) is a default, not a
@@ -438,6 +448,7 @@ same bits as before.
 | `area_ratio` | axon to soma area ratio (sets the axon's time constant and capacitance) | > 0 |
 | `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1 | [0, 1] |
 | `gNa2` | axonal Na conductance [nS] | ≥ 0 |
+| `gKHT` | somatic KHT conductance [nS], for model types with KHT; default 875 | ≥ 0 |
 | `soma_na_vhalf`, `axon_na_vhalf` | Na inactivation midpoint [mV] (default −62.5); see "Somatic spike" | finite |
 | `klt_to_leak` | replace the soma's and the axon's KLT by a leak that keeps rest: `"chord"` adds the KLT conductance at rest, `"slope"` the slope of the model's own steady-state KLT current (z frozen at rest); `None` keeps KLT. Scaled by `klt1`, `klt2`. See "Resonance" and "Inhibition" | `None`, `"chord"`, `"slope"` |
 
@@ -583,11 +594,11 @@ default):
 | Model | Spike height | 50% | Coincident threshold | 3% window | Rheobase (100 ms step) |
 |---|---|---|---|---|---|
 | 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.1 → 199.7 µs (−0.7%) | 3785 → 3852 pA (+1.8%) |
-| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.72 → 48.22 nS (+1.1%) | 199.0 → 198.0 µs (−0.5%) | 3848 → 3877 pA (+0.8%) |
-| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.5 → 166.9 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
+| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.82 → 48.33 nS (+1.1%) | 198.8 → 197.8 µs (−0.5%) | 3857 → 3887 pA (+0.8%) |
+| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.2 → 166.5 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
-  217.5, 216.8 → 215.5 and 182.4 → 182.5 µs.
+  217.5, 216.5 → 215.4 and 182.1 → 182.0 µs.
 - The 0.5% windows narrow by 0.5–0.7% for the 45-compartment and `TwoCpt.m`
   models.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
@@ -618,7 +629,7 @@ Values are for the Python port.
 | Spike initiation site | AIS (compartment 3) for an EPSG pair at 1.25–3× threshold; under sustained input 0–36% of spikes start at node 1 or 2 where 50 or more spikes fired, 8% at 350 Hz and the default `gE` (`initiation.py`, #80) | AIS; 5–60% of spikes start at node 1 or 2 under sustained input (Lehnert 2014) |
 | Input resistance, active, at rest | 2.4 MΩ steady, ~4.7 MΩ peak with the leak rebalanced at −68 mV (`rebalance_rest=True`, as in the dendrites table); 2.5 / 4.8 MΩ for the default membrane, which settles at −68.13 mV where the conductances differ a little (`measure.passive_step`, #68) | 5 MΩ (Lehnert's model); ~7 MΩ measured |
 | Somatic spike, from inflection (100 ms step) | 7.4 / 13.3 / 18.2 mV at 1.5× / 2× / 3× rheobase | 17 ± 2 mV mature, 5–15 mV near threshold, graded |
-| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 354 Hz, Q 2.75) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
+| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 354 Hz, Q 2.76) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
 | Spike resonance: sine frequency with the lowest firing threshold | 428 Hz (2-compartment: 429 Hz) | 285 Hz (same model) |
 | EPSG-train threshold minimum: rate with the lowest threshold | 430 Hz (2-compartment: 420 Hz) | 317 Hz (same model, EPSC train) |
 
@@ -706,7 +717,7 @@ than the spike.
 |---|---|---|---|
 | 45-compartment (`msoAxon.m`) | 7.4 mV | 13.3 mV | 18.2 mV |
 | 45-compartment, KLT removed at soma + AIS, rest rebalanced (dendrotoxin) | 25.4 mV | 28.2 mV | 31.7 mV |
-| 2-compartment (`TwoCpt.m`) | 6.4 mV | 13.0 mV | 17.8 mV |
+| 2-compartment (`TwoCpt.m`) | 6.3 mV | 12.8 mV | 17.4 mV |
 
 - **The unmodified model already matches mature cells.** Lehnert et al. 2014
   report "∼10 mV" for their model too.
@@ -738,7 +749,8 @@ than the spike.
   moved 0.6–1.9 mV under the same changes (25.08 mV on macOS against 25.97 mV on
   Linux CI at 1.5×), and so did the controls (2-compartment 2× spread 12.8–17.6
   mV). The old control values (7.6 / 13.4 / 19.4 and 6.2 / 15.6 / 17.6 mV) were
-  single teeth of that comb: the 2-compartment 2× value is 13.0 mV, not 15.6.
+  single teeth of that comb: the 2-compartment 2× value was 13.0 mV, not 15.6.
+  These spreads predate the `gKHT` correction, which moved that value to 12.8 mV.
 - **Spikes driven by EPSG pairs** measure 9–11 mV at 2× threshold, against 8.5 ±
   1.3 mV in vivo (van der Heijden et al. 2013). Near threshold the EPSP and
   spike merge and the inflection is ambiguous.
@@ -788,10 +800,10 @@ than the spike.
 
   | 2-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
-  | −68, −62.5 | 33% | 3846 pA | 2.43 MΩ | 588 µs | 199 µs | 6.4 / 13.0 / 17.8 mV |
-  | −68, −77 | 76% | 4426 pA | 2.39 MΩ | 577 µs | 191 µs | no inflection (peak 23.5 / 29.1 / 37.8) |
-  | −58, −62.5 | 64% | 1961 pA | 2.36 MΩ | 595 µs | 218 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
-  | −58, −77 | 92% | 2033 pA | 2.33 MΩ | 588 µs | 215 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
+  | −68, −62.5 | 33% | 3857 pA | 2.41 MΩ | 587 µs | 199 µs | 6.3 / 12.8 / 17.4 mV |
+  | −68, −77 | 76% | 4437 pA | 2.38 MΩ | 576 µs | 190 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
+  | −58, −62.5 | 64% | 1989 pA | 2.27 MΩ | 591 µs | 216 µs | no inflection (peak 13.1 / 16.2 / 21.4) |
+  | −58, −77 | 92% | 2061 pA | 2.25 MΩ | 584 µs | 213 µs | no inflection (peak 12.9 / 15.9 / 20.9) |
 
   - **Scott's V½ moves the rheobase and little else:** at −68 mV, −77 raises
     rheobase by 16% (45-compartment) and 15% (2-compartment), and moves Rin,
@@ -814,9 +826,9 @@ than the spike.
     is only reported where the rest is steady, and the steadiness check now
     watches every compartment, not only the soma.
   - **The models disagree at −58 mV, because they change different things:**
-    rheobase rises 39% in the 45-compartment model and falls 49% in the
+    rheobase rises 39% in the 45-compartment model and falls 48% in the
     2-compartment one; the window narrows from 200 to 137 µs in the first and
-    widens from 199 to 218 µs in the second. `two.get_params` recalibrates every
+    widens from 199 to 216 µs in the second. `two.get_params` recalibrates every
     conductance to the lookup's resting fractions at `v0` (node 3,
     `active-full`, −58 against −68 mV: `gNa1` 154 against 1645 nS, 0.09×;
     `gKLT1` 0.20×; `gh1` 2.33×), so its −58 mV cell is a different cell, with
@@ -889,7 +901,7 @@ width against a resonance, a mismatch of measure.
 | 45-compartment, rest rebalanced | 2.4 MΩ | 367 Hz, 2.82 | 439 Hz | 446 Hz |
 | 45-compartment, KLT frozen at its resting conductance (`klt_to_leak="chord"`) | 9.1 MΩ | none (low-pass) | none (rises with frequency) | none (falls to 800 Hz) |
 | 45-compartment, KLT replaced by its slope conductance (`klt_to_leak="slope"`) | 2.6 MΩ | none (Q 1.00) | none (2% dip at 154 Hz) | none (flat) |
-| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.75 | 429 Hz | 420 Hz |
+| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.76 | 429 Hz | 420 Hz |
 
 What it shows:
 

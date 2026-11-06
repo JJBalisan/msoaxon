@@ -361,3 +361,30 @@ def test_the_slope_below_the_klt_reversal_raises_before_any_run(no_run):
     args = STEP[:7] + (-100.0, 1)
     with pytest.raises(ValueError, match="slope conductance"):
         run(*args, klt_to_leak="slope")
+
+
+def test_somatic_kht_is_the_45_compartment_somas_conductance():
+    p = two.get_params(-68.0, 3, 1, "active-full")
+    assert p.gKHT == C.G_KHT[0] * C.SA[0] == 875.0
+    assert two.get_params(-68.0, 3, 1, "active-KHT").gKHT == 875.0
+    assert two.get_params(-68.0, 3, 1, "passive").gKHT == 0.0
+
+
+@pytest.mark.parametrize("v0", [-68.0, -58.0])
+def test_kht_resting_current_is_balanced_so_rest_holds(v0):
+    t, x = run("step", 5, 5, 0.0, 3, "active-KHT", 200, v0, 1)
+    assert np.abs(x[:, :2] - v0).max() < 1e-9
+
+
+def test_gkht_keyword_replaces_the_default_where_the_model_has_kht():
+    assert two.get_params(-68.0, 3, 1, "active-full", gKHT=10.0).gKHT == 10.0
+    assert two.get_params(-68.0, 3, 1, "passive", gKHT=10.0).gKHT == 0.0
+    for bad in (-1.0, float("nan")):
+        with pytest.raises(ValueError, match="gKHT must be >= 0"):
+            two.get_params(-68.0, 3, 1, "active-full", gKHT=bad)
+
+
+def test_goldwyn_preset_has_no_kht_as_in_their_model():
+    kw = {k: v for k, v in two.GOLDWYN_2019.items() if k != "v0"}
+    p = two.get_params(two.GOLDWYN_2019["v0"], 3, 1, "active-full", **kw)
+    assert p.gKHT == 0.0 and p.IKHT0 == 0.0

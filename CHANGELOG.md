@@ -6,6 +6,25 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+The two-compartment model's KHT is corrected, so its published numbers move a
+little. The 45-compartment model's do not.
+
+### Fixed
+
+- `two.py`'s `gKHT` is 875 nS, Lehnert et al. 2014's somatic density over the
+  soma's area, not `TwoCpt.m`'s 0.0114 nS, a probable slip that left KHT with no
+  effect. Its current at rest is subtracted, so rest stays at `v0`. Rheobase goes
+  from 3846 to 3857 pA and from 1961 to 1989 pA at -58 mV, the coincident
+  threshold from 47.72 to 47.82 nS, the 3% window from 199.0 to 198.8 µs and the
+  somatic spike at 2× from 13.0 to 12.8 mV. `TwoCpt.m` is unchanged.
+
+### Added
+
+- `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0: their
+  model has no KHT.
+
 ## 1.10.0 (2 Nov 2026)
 
 The figures are redrawn to one style (#137): paper-width PNG plus PDF,

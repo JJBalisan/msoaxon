@@ -109,9 +109,9 @@ def test_passive_membrane_gives_a_positive_resistance():
 def test_two_compartment_positive_step_has_a_peak():
     # Before the fix: peak 0.09 MOhm and tau 0.0 for I = +2.
     r = _step("two", I=2.0)
-    assert np.isclose(r["rin_steady"], 2.4256, rtol=1e-3)
-    assert np.isclose(r["rin_peak"], 4.8758, rtol=1e-3)
-    assert np.isclose(r["tau"], 0.1157, atol=1e-3)
+    assert np.isclose(r["rin_steady"], 2.4124, rtol=1e-3)
+    assert np.isclose(r["rin_peak"], 4.8627, rtol=1e-3)
+    assert np.isclose(r["tau"], 0.1137, atol=1e-3)
 
 
 def test_response_does_not_depend_on_the_initial_potential():
