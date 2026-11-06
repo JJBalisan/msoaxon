@@ -1227,27 +1227,35 @@ def test_two_runs_are_bit_identical_here(stim_name, input_node, quiet_native):
 
 
 # Open (#108, for JJ): two_cpt integrates at TwoCpt.m's rtol = atol = 1e-6 and
-# multi at 1e-8, so a few of these runs sit either side of multi's tolerance
-# below, at one upstroke sample each. Which ones moved with the KHT fix (#160):
-# the sine at the soma is now over, by up to 1.24x, and the three axonal inputs,
-# over by up to 2.3x before it, are now under. Against an exact run at 1e-10 the
-# native error is no worse than the exact one on the sine (0.0083 against 0.0156
-# mV), and at 1e-8 all four are within tolerance: solver drift, not the port.
-# Not loosened. Not strict either, because they are close enough to the line for
-# another platform to land on the other side.
+# multi at 1e-8, so at 1e-6 several runs sit on multi's tolerance below, at one
+# upstroke sample each, and which ones cross it depends on the platform and the
+# model. As a share of what is allowed, on darwin-arm64: sine 1.24, Synaptic
+# 0.99 (1.09 on Linux x86-64), EPSG 0.91, Events 0.90, EPSG at the axon 0.84.
+# The KHT fix (#160) moved these: the axonal inputs were up to 2.3 before it.
+# Against an exact run at 1e-10 native is no worse than exact on the sine
+# (0.0083 against 0.0156 mV). Not loosened. Marked at 0.8 and up, and not
+# strict, since close runs can land either side;
+# test_two_native_matches_exact_at_1e8 is the guard that does not drift, with
+# every run strict and at 0.59 or under on darwin-arm64.
 TWO_DRIFT = pytest.mark.xfail(
     strict=False, reason="near multi's tolerance at two_cpt's rtol 1e-6"
 )
-TWO_DRIFT_RUNS = {("sine", 1), ("EPSG", 3), ("EPSGpair", 3), ("Synaptic", 3)}
+TWO_DRIFT_RUNS = {
+    ("sine", 1),
+    ("Synaptic", 1),
+    ("EPSG", 1),
+    ("Events/many", 1),
+    ("EPSG", 3),
+    ("EPSGpair", 3),
+    ("Synaptic", 3),
+}
 TWO_NATIVE_RUNS = [
     pytest.param(*run, marks=TWO_DRIFT) if run in TWO_DRIFT_RUNS else run
     for run in TWO_RUNS
 ]
 
 
-@needs_ext
-@pytest.mark.parametrize(("stim_name", "input_node"), TWO_NATIVE_RUNS)
-def test_two_native_matches_exact(stim_name, input_node, quiet_native):
+def _assert_two_native_matches_exact(stim_name, input_node):
     # the golden traces' tolerance (tests/test_golden.py), as multi's
     # native mode is held to
     stim, start, stop, amp, syn_kw = TWO_STIMULI[stim_name]
@@ -1265,6 +1273,23 @@ def test_two_native_matches_exact(stim_name, input_node, quiet_native):
             rtol=1e-4,
             atol=5e-3,
         )
+
+
+@needs_ext
+@pytest.mark.parametrize(("stim_name", "input_node"), TWO_NATIVE_RUNS)
+def test_two_native_matches_exact(stim_name, input_node, quiet_native):
+    _assert_two_native_matches_exact(stim_name, input_node)
+
+
+@needs_ext
+@pytest.mark.parametrize(("stim_name", "input_node"), TWO_RUNS)
+def test_two_native_matches_exact_at_1e8(
+    stim_name, input_node, quiet_native, monkeypatch
+):
+    # at the solver tolerance multi runs at, so a port bug can't pass as drift
+    monkeypatch.setattr(two, "RTOL", 1e-8)
+    monkeypatch.setattr(two, "ATOL", 1e-8)
+    _assert_two_native_matches_exact(stim_name, input_node)
 
 
 # Open (#108, for JJ): 1.04x over since the KHT fix (#160), 1.04e-4 mV in V1

@@ -441,9 +441,11 @@ and the Newton matrix goes to faer's sparse LU, the tree solver's shape being
 the 45-compartment model's. `two_cpt` integrates at `TwoCpt.m`'s
 `RTOL = ATOL = 1e-6`, not 1e-8, so native and exact agree less closely than for
 the 45-compartment model: every two-compartment golden trace passes in fast and
-native, but at 151 interpolated samples a few runs (`tests/test_fast.py`,
-`TWO_DRIFT`) sit either side of rtol 1e-4 / atol 5e-3 mV at one point on an
-upstroke (the sine at the soma is 1.24× over, 0.0134 mV), and a spike stop lands
+native, but at 151 interpolated samples several runs (`tests/test_fast.py`,
+`TWO_DRIFT`) sit on rtol 1e-4 / atol 5e-3 mV at one point on an upstroke, and
+which ones cross it depends on the platform (the sine at the soma is 1.24× over,
+0.0134 mV; a synaptic input is 0.99 of it on darwin-arm64, 1.09 on Linux x86-64).
+All of them are within it at 1e-8, which a strict test holds. A spike stop lands
 1.15e-6 ms from scipy's. Against an exact run at rtol 1e-10 both modes are off by
 the same order at their own steps (exact 0.0087 to 0.0284 mV, native 0.0083 to
 0.0212), and at 1e-8 the four runs are within tolerance. Run as the default,
