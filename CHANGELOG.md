@@ -9,7 +9,10 @@ same version as the package, bumped in the same release PR.
 ## Unreleased
 
 The two-compartment model's KHT is corrected, so its published numbers move a
-little; the 45-compartment model's do not. `membrane()` also gets the knobs for the cell-to-cell diversity the papers name (#82) and `multi.with_axon` the axon geometry (#81); every default is today's literal, so no published number moves and the golden traces are bit-identical.
+little and 17 of its golden traces with them; the 45-compartment model's do not.
+`membrane()` also gets the knobs for the cell-to-cell diversity the papers name
+(#82) and `multi.with_axon` the axon geometry (#81); their defaults are today's
+literals, so those two move nothing.
 
 ### Fixed
 

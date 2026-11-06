@@ -375,11 +375,13 @@ reference these are history; they are not reverted.
   0.0114 nS against about 1e4 nS of KLT beside it, a probable slip that left the
   model's KHT with no effect. `two.py` calculates it as it does every other
   conductance, from its share of the 45-compartment soma's resting conductance
-  (0.46%): 823 nS at −68 mV, close to that soma's 875 nS, and 156 nS at −58 mV.
+  (0.46%): at node 3 and 10 MΩ, 823 nS at −68 mV, close to that soma's 875 nS, and
+  156 nS at −58 mV.
   The leak gives up that share and KHT's current at rest is subtracted, as Na's,
   KLT's and h's are, so the resting conductances still sum to the total and rest
-  stays at `v0`. `gKHT=` replaces it, and `GOLDWYN_2019` sets 0, since the parts
-  of Goldwyn's paper read for this describe Na and KLT only.
+  stays at `v0`. `gKHT=` replaces it, and `GOLDWYN_2019` sets 0, since Goldwyn's
+  model has none. Results labelled `TwoCpt.m` in this document and in the scripts
+  mean its calibration (10 MΩ, 0.71 ms, −68 mV) with this KHT.
 
 ## Quirks kept on purpose
 
@@ -400,9 +402,10 @@ move the golden traces (`tests/golden_traces.json`) and the numbers here:
 - `TwoCpt.m` has calibrated axonal Na (`gNa2`) only for nodes 3 (119) and 5
   (25.5). Every other node gets the placeholder 140, so 2-CPT runs at those
   nodes use an uncalibrated value. `two_cpt(..., gNa2=...)`
-  replaces it. The calibration is also for −68 mV, where 118 nS reproduces the
-  45-compartment threshold at node 3. At −58 mV the model recalibrates its other
-  conductances but keeps 119 nS: its threshold is 28.5 nS against the rebalanced
+  replaces it. The calibration also looks to be for −68 mV, where 118 nS
+  reproduces the 45-compartment threshold at node 3 (`TwoCpt.m` doesn't say how it
+  got 119). At −58 mV the model recalibrates its other conductances but keeps 119
+  nS, as `GOLDWYN_2019` does: its threshold is 28.5 nS against the rebalanced
   45-compartment model's 66.6 nS, which about 63 nS would match. That is threshold
   only, and the two −58 mV cells differ for other reasons too (see "Somatic
   spike"), so it stays at 119 nS.
@@ -428,7 +431,7 @@ The 45-compartment model follows Lehnert et al. 2014
 model is the coupling-constant framework of Goldwyn, Remme & Rinzel 2019
 ([doi](https://doi.org/10.1371/journal.pcbi.1006476)).
 
-`TwoCpt.m` changes Goldwyn's passive targets:
+`TwoCpt.m` changes Goldwyn's passive targets and adds KHT:
 
 | | Goldwyn 2019 | `TwoCpt.m` |
 |---|---|---|
@@ -439,7 +442,9 @@ model is the coupling-constant framework of Goldwyn, Remme & Rinzel 2019
 The old values survive as comments beside the new ones (`%8.5`, `%-58`).
 `GOLDWYN_2019` in `msoaxon/two.py` restores them:
 `two_cpt(..., v0=-58, r1=8.5, tau_est=0.34, gKHT=0)`. Goldwyn's model has no
-KHT; `TwoCpt.m`'s comes from Lehnert et al. 2014.
+KHT; `TwoCpt.m`'s comes from Lehnert et al. 2014. The preset is those targets and
+no KHT, not Goldwyn's whole model, which has Na in the axon compartment only, no
+h and E_K −106 mV; it keeps `TwoCpt.m`'s h, somatic Na, `gNa2` and E_K.
 
 The coupling `node` looks up (forward and backward constants, the area ratio,
 the KLT and h fractions and the axonal Na conductance) is a default, not a
@@ -452,7 +457,7 @@ same bits as before.
 | `gC` | coupling conductance [nS]; replaces what `r1` and the constants give, so `r1` stays at its default | > 0 |
 | `couple12`, `couple21` | forward (soma → axon) and backward coupling constants | (0, 1) |
 | `area_ratio` | axon to soma area ratio (sets the axon's time constant and capacitance) | > 0 |
-| `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1 | [0, 1] |
+| `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1, less the soma's KHT share (0.46% at the default `gKHT`) | [0, 1] |
 | `gNa2` | axonal Na conductance [nS] | ≥ 0 |
 | `gKHT` | somatic KHT conductance [nS], for model types with KHT; default from its resting fraction; the leak gives up its resting conductance | ≥ 0 |
 | `soma_na_vhalf`, `axon_na_vhalf` | Na inactivation midpoint [mV] (default −62.5); see "Somatic spike" | finite |
@@ -513,7 +518,7 @@ Measured the way Myoga et al. 2014 did in adult gerbil MSO at 35 °C
 | 2-compartment, `TwoCpt.m` | 199 µs | 217 µs |
 | 2-compartment, Goldwyn 2019 calibration | 167 µs | 182 µs |
 
-These widths use inputs 3% above threshold. At 0.5% they shrink to 70–91 µs. The
+These widths use inputs 3% above threshold. At 0.5% they shrink to 69–91 µs. The
 margin matters a lot, and the paper's "200 pS (~3%)" is ambiguous: 200 pS is
 closer to 0.5% of their 43 nS EPSGs.
 
@@ -525,7 +530,7 @@ How the widths are computed:
   there. About 20 simulations per window, within 0.5 µs of the same search at
   1e-7.
 - Both searches predict rather than halve. At the 10 mV criterion the peak of
-  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.8 mV at
+  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.6 mV at
   −1%, −0.1%, 0, +0.1%, +1% of threshold), so each run that doesn't spike says
   how close it came. That takes about 10 simulations per threshold on average
   (125 for the twelve benchmark thresholds, at most 13) instead of 15.
@@ -605,11 +610,15 @@ default):
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
   217.5, 216.6 → 215.5 and 182.1 → 182.0 µs.
-- The 0.5% windows narrow by 0.5–0.7% for the 45-compartment and `TwoCpt.m`
+- The 0.5% windows narrow by 0.5–0.9% for the 45-compartment and `TwoCpt.m`
   models.
+- The windows carry about 1 µs of solver jitter at production tolerance, so the
+  last digit is not a model effect. Goldwyn's moved by that much when `TwoCpt.m`'s
+  KHT was corrected, although its own KHT is negligible before and 0 after: its 3%
+  window is 167.22 µs before and 167.23 µs after at rtol 1e-9.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
   two models' criterion moves onto the steep upstroke, which raises their
-  thresholds 1.0–1.8% and narrows their windows by at most 0.75%: about 2 µs on
+  thresholds 1.0–1.8% and narrows their 3% windows by at most 0.75%: about 2 µs on
   200, inside the 0.5% vs 3% margin ambiguity above. Goldwyn still narrows the
   window by about 17% (−16.8% at 10 mV, −16.6% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
