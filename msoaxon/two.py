@@ -11,11 +11,12 @@ import numpy as np
 
 from msoaxon import _common, _solve, constants as C, synaptic
 
-# Passive targets of Goldwyn, Remme & Rinzel 2019 (PLoS Comput Biol
-# 15:e1006476), the paper this model's coupling-constant framework comes from.
-# TwoCpt.m still carries them as comments (%8.5, %-58) beside the values it
-# replaced them with.
-# Their model has Na and KLT but no KHT, hence the 0.
+# Goldwyn, Remme & Rinzel 2019 (PLoS Comput Biol 15:e1006476), the paper this
+# model's coupling-constant framework comes from: their passive targets, which
+# TwoCpt.m still carries as comments (%8.5, %-58) beside the values it replaced
+# them with, and no KHT, since their model has none. This is not their whole
+# model, which has Na in the axon compartment only, no h and E_K -106 mV; the
+# preset keeps TwoCpt.m's channels otherwise.
 GOLDWYN_2019 = {"r1": 8.5, "tau_est": 0.34, "v0": -58.0, "gKHT": 0.0}
 
 # Soma input resistance of TwoCpt.m [MOhm]: the default of r1 below.
@@ -348,9 +349,9 @@ def get_params(
 
     The `node` lookup (Coupling.mat and the channel fractions of the
     45-compartment model) supplies every value a keyword leaves as
-    None, so a call without keywords is TwoCpt.m's. A keyword replaces
-    that one value and nothing else, which makes the coupling plane
-    sweepable; see two_cpt for an example.
+    None, so a call without keywords is TwoCpt.m's, except for gKHT. A
+    keyword replaces that one value and nothing else, which makes the
+    coupling plane sweepable; see two_cpt for an example.
 
     Args:
         v0: Resting (and leak reversal) potential [mV].
@@ -380,8 +381,9 @@ def get_params(
             calibrated value for nodes 3 and 5 only.
         gKHT: Somatic KHT conductance [nS], >= 0, for the model types
             that have KHT (default: its share of the resting conductance
-            in Lehnert et al 2014's densities, 823 nS at -68 mV and 156 at
-            -58). It takes its resting conductance from the leak.
+            in Lehnert et al 2014's densities; at node 3 and 10 MOhm, 823
+            nS at -68 mV and 156 at -58). It takes its resting conductance
+            from the leak.
         soma_na_vhalf: Somatic Na inactivation midpoint [mV]; Scott et
             al 2010 measured -77. gNa1 stays calibrated at the default
             (-62.5), so a shift changes how many channels are available
@@ -660,7 +662,7 @@ def _rhs(
     stim_type: str,
     s: _common.Stimulus,
 ) -> list[float]:
-    """Computes TwoCptODE.m's right-hand side.
+    """Computes TwoCptODE.m's right-hand side, plus KHT's resting term.
 
     Compartment 1 is the soma, 2 the axon node; currents in pA.
     """
@@ -845,7 +847,8 @@ def two_cpt(
         klt1: Fraction of the soma's resting conductance that is KLT,
             in [0, 1]; klt2 is the axon's. Together with h1, h2 and
             na1 the fractions of a compartment must sum to at most 1,
-            and only the channels model_type switches on count.
+            less the soma's KHT share (0.46% at the default gKHT), and
+            only the channels model_type switches on count.
         klt2: See klt1.
         h1: Fraction that is h, in [0, 1]; h2 is the axon's.
         h2: See h1.
