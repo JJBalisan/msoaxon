@@ -202,7 +202,7 @@ is what the golden traces and the analyses use for nodes 3 and 5.
 | g_h1, g_h2 [nS] | 164.5, 1.602 | 165.1, 0 | derived: fraction · g_tot / a∞ at v0 |
 | g_lk1, g_lk2 [nS] | 4.113, 0.08353 | 4.126, 0.7398 | derived: (1 - sum of fractions) g_tot, the soma's also less KHT's share |
 | g_Na1 [nS] | 1645 | 1651 | derived: Na fraction · g_tot1 / (m∞⁴ (0.993 h∞ + 0.007)) at v0 |
-| g_Na2 [nS] | 119 | 25.5 | `TwoCpt.m`, calibrated at -68 mV for nodes 3 and 5 only; 140 for every other node |
+| g_Na2 [nS] | 119 | 25.5 | `TwoCpt.m`, calibrated for nodes 3 and 5 only, apparently at -68 mV; 140 for every other node |
 | g_KHT1 (soma only) [nS] | 822.6 | 825.3 | derived: KHT fraction · g_tot1 / p∞ at v0; not `TwoCpt.m`'s, see "Deliberate differences" |
 | E_Na, E_K (KLT and KHT), E_h, E_lk [mV] | 69, -90, -35, v0 | same | code |
 
