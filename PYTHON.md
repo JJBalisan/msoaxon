@@ -1122,6 +1122,34 @@ compartment's KLT conductance at rest added to its leak), and for the
 two-compartment model with KLT present and with the same substitution
 (`two_cpt(klt_to_leak="chord")`).
 
+## Axon geometry
+
+`mso_axon(..., mem=membrane(..., morph=with_axon(...)))` makes the axon's
+geometry a knob. `with_axon()` takes `internode_length` (100 µm), `diameter`
+(0.66 µm), `node_length` (1 µm), `ais_length` (20 µm, two equal compartments),
+`ais_start` (0), `myelin_cap` (0.01 µF/cm²), `internode_scale` and `node_scale`
+(a scalar or one multiplier per internode/node pair, for distal shortening) and
+`hold_ld` (True multiplies the internode length by `diameter / 0.66`, so L/d
+stays at `internode_length / 0.66`, 100 / 0.66 at the default length; False
+leaves it free). At the defaults it
+returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
+
+Choices to know: channel densities are per µm², so a longer node holds more
+channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
+(scaled with `diameter / 0.66`), so its frustum area is not exact for any
+diameter; `ais_start > 0` inserts a hillock between the soma and the AIS (the
+AIS's leak, KLT and h densities, no Na or KHT), a modelling choice rather than a
+measured one. The numbering stays physical: the hillock is compartment 2, the
+AIS 3-4 and the last node 46, so a site keeps its label but its number moves up
+by one against `ais_start=0`. The analyses' default `node=3` is the distal AIS at
+`ais_start=0` and the proximal AIS beyond it, which changes threshold by 11% and
+spike height by 58%, so they warn: compare `node=4` there, and go by
+`Morphology.labels` across a sweep. `spiking()` and the plots still read the
+45-compartment layout, so they are not valid on a hillock chain. Longer axons
+also take the spike-site search past `initiation.py`'s `LEAD`, tuned to the
+default 0.35-0.4 ms conduction: raise `lead` with the conduction time. Axial
+resistivity stays 100 Ω·cm.
+
 ## Dendrites
 
 `mso_axon(..., morph=with_dendrites())` adds two dendrites, following the

@@ -9,11 +9,19 @@ same version as the package, bumped in the same release PR.
 ## Unreleased
 
 `membrane()` gets the knobs for the cell-to-cell diversity the papers name
-(#82); every default is today's literal, so no published number moves and
-the golden traces are bit-identical.
+(#82) and `multi.with_axon` the axon geometry (#81); every default is today's
+literal, so no published number moves and the golden traces are bit-identical.
 
 ### Added
 
+- `multi.with_axon(...)`, a `Morphology` builder for the axon geometry that
+  `constants.py` folds into `SA`, `cap` and `g_ax`: internode length,
+  diameter, node length, AIS length and start, myelin capacitance, per-pair
+  `internode_scale` and `node_scale` vectors for distal shortening, and
+  `hold_ld` to hold or free L/d. At the defaults every array is bit-identical
+  to `LUMPED`'s (pinned in `tests/test_axon_geometry.py`), so no number and
+  no golden trace moves. Python only; Rust still takes the arrays. The
+  sweeps in #81 stay open.
 - `membrane(ih_density_scale=, ih_vhalf=, ih_tau_scale=)` for the h current's
   density, half-activation and time constant, `na_act_vhalf=` and
   `na_act_slope=` for the Na activation curve, `dendrite_kht_scale=` for KHT
