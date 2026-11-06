@@ -8,6 +8,10 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
+`membrane()` gets the knobs for the cell-to-cell diversity the papers name
+(#82) and `multi.with_axon` the axon geometry (#81); every default is today's
+literal, so no published number moves and the golden traces are bit-identical.
+
 ### Added
 
 - `multi.with_axon(...)`, a `Morphology` builder for the axon geometry that
@@ -18,6 +22,18 @@ same version as the package, bumped in the same release PR.
   to `LUMPED`'s (pinned in `tests/test_axon_geometry.py`), so no number and
   no golden trace moves. Python only; Rust still takes the arrays. The
   sweeps in #81 stay open.
+- `membrane(ih_density_scale=, ih_vhalf=, ih_tau_scale=)` for the h current's
+  density, half-activation and time constant, `na_act_vhalf=` and
+  `na_act_slope=` for the Na activation curve, `dendrite_kht_scale=` for KHT
+  in the dendrites (a multiple of the somatic density, the same along them as
+  in Nabel et al. 2019; the default 0 keeps them without), and `temperature=`
+  with `q10=` and `q10_conductance=`: Q10 factors on every gate's time constant
+  and every voltage-gated density, relative to the model's 35 C. Fast and native
+  modes honour all of them through the gating constants and arrays they already
+  take (`rust/` is unchanged). `Membrane.key` and `describe()` carry the knobs.
+  No MSO Q10 has been measured: the defaults 3 and 2 are Rothman & Manis 2003's.
+- `constants.minf`, `ainf` and the six `tau*` functions take the midpoint,
+  slope or rate factor as optional arguments.
 
 ## 1.10.0 (2 Nov 2026)
 

@@ -842,6 +842,54 @@ than the spike.
   a positive real part, naming the compartments the growing mode lives in.
   `axon_rest=v0` rebalances the whole cable, which warns above about −60.5 mV.
 - `klt_to_leak`: replaces KLT by a leak, keeping rest (see Resonance below).
+- Gate knobs (#82), for the cell-to-cell diversity along the frequency map
+  that the papers name (Baumann et al. 2013; Bondy et al. 2021; Nabel et al.
+  2019), all defaulting to `msoAxon.m`'s literals so nothing moves:
+  - `ih_density_scale` (× gh everywhere), `ih_vhalf` (mV, default −80.4) and
+    `ih_tau_scale` (× the h activation time constant).
+  - `na_act_vhalf` (mV, default −46) and `na_act_slope` (mV, default 11): the
+    Na activation curve, the same in every compartment; the inactivation
+    midpoint stays `soma_na_vhalf`.
+  - `dendrite_kht_scale`: gKHT in the dendrites, the same along them, as a
+    multiple of the soma's 0.1 nS/µm² (default 0: KHT at the soma only, as in
+    Lehnert et al. 2014, so a multiple of their own density could not switch
+    it on). `with_dendrites()` morphologies only. Nabel et al. 2019 found
+    high-voltage-activated K channels more evenly spread than KLT, with clear
+    expression at distal dendrites, and modelled KHT with equal conductance in
+    every compartment: 0.5449 mS/cm² alongside KLT, a scale of about 0.054. The
+    gate stays Rothman & Manis's `pinf`, closed near rest; Nabel's own gate
+    activates near rest and is not modelled.
+  - `temperature` (°C, default 35), `q10` (default 3) and `q10_conductance`
+    (default 2): every gate's time constant is divided by
+    `q10 ** ((temperature − 35) / 10)`, on top of the Q10 factors `constants.py`
+    already holds for `taup` and `taua`, and every voltage-gated density is
+    multiplied by `q10_conductance ** ((temperature − 35) / 10)`. These are the
+    two values Rothman & Manis 2003 suggested for scaling to 38 °C, as summarised
+    by Manis & Campagnola 2018, who add that no data directly support them;
+    applying the second to every voltage-gated density is this repo's reading.
+    35 °C is `msoAxon.m`'s, so it changes no bit whatever the Q10s. The leak and
+    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so both are
+    assumptions, not data. Slower conduction also takes spike-site search past
+    `initiation.py`'s `LEAD`, tuned to the default 0.35-0.4 ms: below about 30 °C
+    the reported sites are wrong unless `lead` is raised to match.
+
+  The densities live in the morphology (as `klt_to_leak`'s leak does), so a
+  `mem` built with `ih_density_scale`, `dendrite_kht_scale` or a temperature
+  other than 35 °C carries its own morphology copy: pass `mem` alone, or `mem`
+  with `morph=mem.morph`. `membrane()` refuses a copy that already holds a
+  temperature's densities, or a second `ih_density_scale`. All three modes
+  honour every knob: the numbers the Rust right-hand side already takes from
+  Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
+  `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
+  every knob off its default, each config using its own `mem.morph`.
+  `describe()` names them.
+
+  The curve and density knobs (`na_act_*`, `ih_*`, `dendrite_kht_scale`)
+  move the model's rest. Without `rebalance_rest=True` the gates start at
+  `msoAxon.m`'s literals, so a model type that freezes a gate ignores the
+  matching knob (`na_act_*` in a frozen-m model) and the cell can drift from
+  `v0` or fire at zero input. Pair them with `rebalance_rest=True`, which
+  re-balances the leak at the new gates and keeps rest at `v0`.
 
 The defaults are `msoAxon.m`'s membrane, unchanged.
 

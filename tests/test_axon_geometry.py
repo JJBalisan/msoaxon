@@ -291,3 +291,12 @@ def test_the_default_site_on_a_hillock_chain_warns():
         warnings.simplefilter("error")
         _dispatch.run_model("multi", *args, 4, 3, -68.0, 1, morph=m)
         _dispatch.run_model("multi", *args, 3, 3, -68.0, 1)
+
+
+def test_dendrite_knobs_and_temperature_on_a_hillock_chain():
+    m = multi.with_axon(ais_start=4.0)
+    with pytest.raises(ValueError, match="dendrite_kht_scale"):
+        multi.membrane(-68.0, morph=m, dendrite_kht_scale=1.0)
+    mem = multi.membrane(-68.0, morph=m, temperature=45.0)
+    np.testing.assert_array_equal(mem.g_na, m.g_na * 2.0)
+    assert mem.morph.g_kht[1] == 0.0  # the hillock still has no KHT

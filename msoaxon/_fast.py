@@ -244,18 +244,29 @@ _GATING = {
 }
 
 
-def _gating() -> dict[str, float]:
+def _gating(mem: 'multi.Membrane | None' = None) -> dict[str, float]:
     """Returns every constant the Rust right-hand side takes from Python.
 
     Read when a run is built, not at import, so a change to multi's
     reversal potentials or constants' Q10 factors reaches the Rust side
     exactly as it reaches multi._rhs.
 
+    The membrane's Na activation, h and rate settings (multi.membrane's
+    na_act_*, ih_* and temperature knobs) are numbers `Gating` already
+    takes, so they reach the Rust side with no code of its own, in the
+    same float order as constants.py's functions: q multiplies taum's and
+    tauh's divisor and divides taup's and taua's temperature factor and
+    tauw's and tauz's numerator and constant (x / 1.0 == x, so the default
+    changes no bit).
+
+    Args:
+        mem: The channel overrides; None: the defaults.
+
     Returns:
         name -> value, the names of `Gating` in rust/src/lib.rs.
     """
     multi = importlib.import_module("msoaxon.multi")
-    return {
+    gating = {
         "v_na": float(multi.V_NA),
         "v_k": float(multi.V_K),
         "v_h": float(multi.V_H),
@@ -263,6 +274,23 @@ def _gating() -> dict[str, float]:
         "taua_temp": float(constants._A_TEMP),
         **_GATING,
     }
+    if mem is None:
+        return gating
+    q, qa = float(mem.rate), float(mem.ih_rate)
+    gating["minf_v"] = float(mem.na_act_vhalf)
+    gating["minf_k"] = float(mem.na_act_k)
+    gating["ainf_v"] = float(mem.ih_vhalf)
+    # taum and tauh divide by 3 q, taup and taua multiply by temp / q
+    # (a name missing from _GATING is left for the Rust constructor to name)
+    for name in ("taum_div", "tauh_div"):
+        if name in gating:
+            gating[name] *= q
+    gating["taup_temp"] /= q
+    gating["taua_temp"] /= qa
+    for name in ("tauw_num", "tauw_c", "tauz_num", "tauz_c"):
+        if name in gating:
+            gating[name] /= q
+    return gating
 
 
 def build(
@@ -464,7 +492,7 @@ def _build(
         parent=np.asarray(morph.parent, dtype=np.int64),
         child=np.asarray(morph.child, dtype=np.int64),
         active=tuple(bool(a) for a in active),
-        gating=_gating(),
+        gating=_gating(mem),
         **stim,
     )
 

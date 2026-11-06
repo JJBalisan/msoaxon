@@ -210,6 +210,16 @@ class Membrane:
             starts at v0: no rebalance (msoAxon.m's start, which drifts
             about 0.9 mV), or the soma and the axon rebalanced to the
             same potential (an exact steady state).
+        na_act_vhalf: Negated Na activation midpoint [mV], as C.minf's
+            vhalf expects (same in every compartment).
+        na_act_k: Na activation slope factor [mV], negative, as C.minf's
+            k expects.
+        ih_vhalf: Negated h activation midpoint [mV], as C.ainf's vhalf
+            expects (same in every compartment).
+        rate: The Q10 rate factor every gate's time constant takes
+            (C.taum and the others' q); 1.0 is the model's 35 C.
+        ih_rate: The rate factor of the h activation alone: rate divided
+            by the Ih time-constant scale.
     """
 
     key: tuple[float | bool, ...]
@@ -221,6 +231,11 @@ class Membrane:
     vlk: np.ndarray
     y0_gates: tuple[np.ndarray, ...] | None
     v_rest: np.ndarray | None = None
+    na_act_vhalf: float = 46.0
+    na_act_k: float = -11.0
+    ih_vhalf: float = 80.4
+    rate: float = 1.0
+    ih_rate: float = 1.0
 
     def __post_init__(self) -> None:
         """Freezes the arrays (see Morphology)."""
@@ -871,6 +886,117 @@ def _klt_to_leak(
     return np.zeros(morph.n), morph, vlk
 
 
+def _check_channel_knobs(knobs: dict[str, float], morph: Morphology) -> None:
+    """Validates membrane()'s Ih, Na activation, KHT and Q10 knobs.
+
+    Args:
+        knobs: name -> value of every one of them.
+        morph: The morphology membrane() was asked for.
+
+    Raises:
+        ValueError: As membrane() documents.
+    """
+    if knobs["dendrite_kht_scale"] != 0.0 and morph.lateral is None:
+        raise ValueError(
+            "dendrite_kht_scale needs a morphology with dendrites "
+            "(morph=with_dendrites())"
+        )
+    nonneg = ("ih_density_scale", "dendrite_kht_scale")
+    positive = ("ih_tau_scale", "na_act_slope", "q10", "q10_conductance")
+    for name, value in knobs.items():
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value}")
+        if name in nonneg and value < 0:
+            raise ValueError(f"{name} must be >= 0, got {value}")
+        if name in positive and value <= 0:
+            raise ValueError(f"{name} must be > 0, got {value}")
+
+
+def _applied_scales(key: Any) -> tuple[float, float]:
+    """Returns the h and conductance scales a morphology key already holds.
+
+    Args:
+        key: Morphology.key, in which _scale_channels and klt_to_leak nest
+            the key they copied from.
+
+    Returns:
+        (ih_density_scale, conductance), each 1.0 if none was applied.
+    """
+    ih, conductance = 1.0, 1.0
+    if isinstance(key, tuple):
+        if key and key[0] == "channels":
+            ih, conductance = float(key[2]), float(key[4])
+        for item in key:
+            inner_ih, inner_c = _applied_scales(item)
+            ih, conductance = ih * inner_ih, conductance * inner_c
+    return ih, conductance
+
+
+def _scale_channels(
+    morph: Morphology,
+    ih_density_scale: float,
+    dendrite_kht_scale: float,
+    conductance: float = 1.0,
+) -> Morphology:
+    """Returns morph with gh scaled and the dendrites given KHT.
+
+    The densities live in the morphology, as klt_to_leak's leak does: a
+    copy with its own key, so every path that reads morph.g_h or
+    morph.g_kht (the numpy and Rust right-hand sides, the rest) sees
+    them. At the defaults it is morph itself.
+
+    Args:
+        morph: The morphology.
+        ih_density_scale: Multiplies gh everywhere.
+        dendrite_kht_scale: The dendrites' gKHT as a multiple of the
+            soma's.
+        conductance: Multiplies every voltage-gated density (the Q10
+            factor of membrane()'s temperature); the leak keeps its own.
+
+    Returns:
+        morph, or the copy.
+
+    Raises:
+        ValueError: If morph already holds a temperature's densities, or
+            already holds an h scale and another is asked for: the new
+            membrane's gates or densities would not match it.
+    """
+    held_ih, held_conductance = _applied_scales(morph.key)
+    if held_conductance != 1.0:
+        raise ValueError(
+            "morph already holds a temperature's densities; build from the "
+            "original morphology, or pass the first membrane as mem="
+        )
+    if held_ih != 1.0 and ih_density_scale != 1.0:
+        raise ValueError(
+            "morph already holds an ih_density_scale; build from the "
+            "original morphology"
+        )
+    if (
+        ih_density_scale == 1.0
+        and dendrite_kht_scale == 0.0
+        and conductance == 1.0
+    ):
+        return morph
+    g_h, g_kht = morph.g_h * ih_density_scale, morph.g_kht.copy()
+    if dendrite_kht_scale != 0.0:  # else keep any KHT morph already has
+        g_kht[N:] = dendrite_kht_scale * C.G_KHT[0]
+    return dataclasses.replace(
+        morph,
+        key=(
+            "channels",
+            morph.key,
+            float(ih_density_scale),
+            float(dendrite_kht_scale),
+            float(conductance),
+        ),
+        g_na=morph.g_na * conductance,
+        g_klt=morph.g_klt * conductance,
+        g_h=g_h * conductance,
+        g_kht=g_kht * conductance,
+    )
+
+
 def membrane(
     v0: float,
     soma_klt_scale: float = 1.0,
@@ -881,6 +1007,15 @@ def membrane(
     dendrite_klt_scale: float = 1.0,
     klt_to_leak: str | None = None,
     axon_rest: float | None = None,
+    ih_density_scale: float = 1.0,
+    ih_vhalf: float = -80.4,
+    ih_tau_scale: float = 1.0,
+    na_act_vhalf: float = -46.0,
+    na_act_slope: float = 11.0,
+    dendrite_kht_scale: float = 0.0,
+    temperature: float = 35.0,
+    q10: float = 3.0,
+    q10_conductance: float = 2.0,
 ) -> Membrane:
     """Builds per-compartment channel overrides for the multi model.
 
@@ -942,18 +1077,71 @@ def membrane(
             cable is rebalanced to v0 as before. axon_rest=v0 rebalances
             the whole cable to v0, which is unstable above about -60.5
             mV.
+        ih_density_scale: Multiplies gh in every compartment. Baumann
+            et al 2013 (Front Neural Circuits 7:117) found Ih largest
+            in ventral, high-frequency cells.
+        ih_vhalf: The h activation midpoint [mV] (default -80.4, Baumann
+            et al 2013's fit for dorsal, low-frequency cells); it moves
+            along the frequency map too. Their ventral fit also has a
+            different slope and time-constant shape, which this and
+            ih_tau_scale cannot reach.
+        ih_tau_scale: Multiplies the h activation time constant, on top
+            of the temperature factor. Baumann et al 2013: fastest in
+            high-frequency cells.
+        na_act_vhalf: The Na activation midpoint [mV], in every
+            compartment (default: -46, Scott et al 2010). With
+            na_act_slope it is for exploring the Na-driven subthreshold
+            oscillations of Bondy et al 2021 (J Neurosci 41:6234), who
+            did not report values for either; the inactivation midpoint
+            is soma_na_vhalf.
+        na_act_slope: The Na activation slope factor k [mV], positive
+            (default: 11).
+        dendrite_kht_scale: gKHT in the dendrite compartments
+            (with_dendrites only), the same along them, as a multiple of
+            the somatic gKHT (0.1 nS/um^2). The default 0 is msoAxon.m's
+            and Lehnert et al 2014's: KHT at the soma only. Nabel et al
+            2019 (Front Cell Neurosci 13:38) found high-voltage-activated
+            K channels more evenly spread than KLT, with clear expression
+            at distal dendrites, and modelled KHT with equal conductance
+            in every compartment: 0.5449 mS/cm^2 alongside KLT, which is
+            0.00545 nS/um^2, a scale of about 0.054. The gate here stays
+            C.pinf (Rothman & Manis), closed near rest; Nabel's own gate
+            activates near rest and is not modelled.
+        temperature: The temperature [C]. Every gate's time constant is
+            divided by q10 ** ((temperature - 35) / 10), on top of the
+            Q10 factors constants.py already holds for taup and taua,
+            and every voltage-gated density is multiplied by
+            q10_conductance ** ((temperature - 35) / 10). The model is
+            msoAxon.m's, at 35 C, so 35 changes nothing, bit for bit.
+            The leak and the synaptic kinetics take no Q10.
+        q10: The Q10 of every rate (default 3, the value constants.py
+            already uses; Rothman & Manis 2003's). No MSO Q10 has been
+            measured, so it is an assumption, not data.
+        q10_conductance: The Q10 of the voltage-gated densities (default
+            2, Rothman & Manis 2003's suggestion for scaling their
+            conductances; also an assumption).
 
     Returns:
         A Membrane with key, morph_key, morph, g_na, g_klt, na_vhalf,
-        vlk, y0_gates (None unless rebalance_rest) and v_rest (None
-        unless the rebalanced rest is not uniform).
+        vlk, y0_gates (None unless rebalance_rest), v_rest (None
+        unless the rebalanced rest is not uniform) and the Na
+        activation, h and rate settings. With ih_density_scale,
+        dendrite_kht_scale or a temperature other than 35 set, morph is
+        a copy with its own key (as for klt_to_leak): pass mem alone to
+        mso_axon, or mem with morph=mem.morph. Do not build another
+        membrane from that copy with the same scaling.
 
     Raises:
-        ValueError: If dendrite_klt_scale is set for a morphology
-            without dendrites, klt_to_leak is not None, "chord" or
-            "slope", "slope" at a v0 where KLT has no positive slope
-            conductance, or axon_rest is set without rebalance_rest or
-            is not finite.
+        ValueError: If dendrite_klt_scale or dendrite_kht_scale is set
+            for a morphology without dendrites, klt_to_leak is not
+            None, "chord" or "slope", "slope" at a v0 where KLT has no
+            positive slope conductance, axon_rest is set without
+            rebalance_rest or is not finite, ih_density_scale or
+            dendrite_kht_scale is negative or not finite, ih_tau_scale,
+            na_act_slope or q10 is not positive and finite, or
+            ih_vhalf, na_act_vhalf or temperature is not finite, or
+            temperature and q10 give a rate factor that overflows or
+            underflows to zero.
         RuntimeError: If the steady state of a rebalanced rest cannot
             be found.
 
@@ -975,6 +1163,47 @@ def membrane(
             "dendrite_klt_scale needs a morphology with dendrites "
             "(morph=with_dendrites())"
         )
+    _check_channel_knobs(
+        {
+            "ih_density_scale": ih_density_scale,
+            "dendrite_kht_scale": dendrite_kht_scale,
+            "ih_tau_scale": ih_tau_scale,
+            "na_act_slope": na_act_slope,
+            "q10": q10,
+            "q10_conductance": q10_conductance,
+            "ih_vhalf": ih_vhalf,
+            "na_act_vhalf": na_act_vhalf,
+            "temperature": temperature,
+        },
+        morph,
+    )
+    try:
+        conductance = float(q10_conductance) ** (
+            (float(temperature) - 35.0) / 10
+        )
+    except OverflowError:
+        conductance = math.inf
+    if not (math.isfinite(conductance) and conductance > 0):
+        raise ValueError(
+            f"temperature {temperature} with q10_conductance "
+            f"{q10_conductance} gives a factor {conductance} that is not "
+            "finite and positive"
+        )
+    morph = _scale_channels(
+        morph, ih_density_scale, dendrite_kht_scale, conductance
+    )
+    na_act = (-float(na_act_vhalf), -float(na_act_slope))
+    ih_vh = -float(ih_vhalf)
+    try:
+        rate = float(q10) ** ((float(temperature) - 35.0) / 10)
+    except OverflowError:
+        rate = math.inf
+    ih_rate = rate / float(ih_tau_scale)
+    if not (math.isfinite(rate) and rate > 0 and math.isfinite(ih_rate)):
+        raise ValueError(
+            f"temperature {temperature} with q10 {q10} gives a rate factor "
+            f"{rate} that is not finite and positive"
+        )
     g_klt = morph.g_klt.copy()
     g_klt[0] *= soma_klt_scale
     g_klt[np.isin(morph.labels, "AIS")] *= ais_klt_scale
@@ -989,11 +1218,13 @@ def membrane(
         V[np.isin(morph.labels, _AXON_LABELS)] = axon_rest
         # each compartment balanced on its own, as if V were uniform: exact
         # when it is (no axial current flows), else the starting guess
-        gates = _gates_at(V, na_vhalf)
+        gates = _gates_at(V, na_vhalf, na_act, ih_vh)
         vlk = V + _ionic(V, gates, morph.g_na, g_klt, morph) / morph.g_lk
         if axon_rest != v0:
-            V, vlk = _solve_rest(V, vlk, morph, g_klt, na_vhalf)
-            gates, v_rest = _gates_at(V, na_vhalf), V
+            V, vlk = _solve_rest(
+                V, vlk, morph, g_klt, na_vhalf, na_act, ih_vh, rate, ih_rate
+            )
+            gates, v_rest = _gates_at(V, na_vhalf, na_act, ih_vh), V
         y0_gates = gates
     if klt_to_leak:
         g_klt, morph, vlk = _klt_to_leak(
@@ -1007,6 +1238,12 @@ def membrane(
                 float(ais_klt_scale),
                 float(dendrite_klt_scale),
                 axon_rest,  # sets v_rest, where the leak is built
+                # the gates the rest is found with
+                na_act[0],
+                na_act[1],
+                ih_vh,
+                rate,
+                ih_rate,
             ),
             v_rest=v_rest,
         )
@@ -1022,6 +1259,15 @@ def membrane(
             bool(rebalance_rest),
             float(dendrite_klt_scale),
             axon_rest,
+            float(ih_density_scale),
+            float(ih_vhalf),
+            float(ih_tau_scale),
+            float(na_act_vhalf),
+            float(na_act_slope),
+            float(dendrite_kht_scale),
+            float(temperature),
+            float(q10),
+            float(q10_conductance),
         ),
         morph_key=morph.key,
         morph=morph,
@@ -1031,21 +1277,34 @@ def membrane(
         vlk=vlk,
         y0_gates=y0_gates,
         v_rest=v_rest,
+        na_act_vhalf=na_act[0],
+        na_act_k=na_act[1],
+        ih_vhalf=ih_vh,
+        rate=rate,
+        ih_rate=ih_rate,
     )
     if rebalance_rest:
         _warn_if_unstable(mem, float(v0), axon_rest)
     return mem
 
 
-def _gates_at(V: np.ndarray, na_vhalf: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Returns the steady-state gates (m, h, p, w, z, a) at V."""
+def _gates_at(
+    V: np.ndarray,
+    na_vhalf: np.ndarray,
+    na_act: tuple[float, float] = (46.0, -11.0),
+    ih_vhalf: float = 80.4,
+) -> tuple[np.ndarray, ...]:
+    """Returns the steady-state gates (m, h, p, w, z, a) at V.
+
+    na_act is (C.minf's vhalf, k) and ih_vhalf C.ainf's vhalf.
+    """
     return (
-        C.minf(V),
+        C.minf(V, *na_act),
         C.hinf(V, na_vhalf),
         C.pinf(V),
         C.winf(V),
         C.zinf(V),
-        C.ainf(V),
+        C.ainf(V, ih_vhalf),
     )
 
 
@@ -1076,6 +1335,10 @@ def _solve_rest(
     morph: Morphology,
     g_klt: np.ndarray,
     na_vhalf: np.ndarray,
+    na_act: tuple[float, float] = (46.0, -11.0),
+    ih_vhalf: float = 80.4,
+    rate: float = 1.0,
+    ih_rate: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Root-finds a rebalanced rest that is not uniform.
 
@@ -1091,6 +1354,10 @@ def _solve_rest(
         morph: The morphology.
         g_klt: gKLT per compartment [nS/um^2].
         na_vhalf: Negated Na inactivation midpoint per compartment [mV].
+        na_act: Membrane.na_act_vhalf and na_act_k.
+        ih_vhalf: Membrane.ih_vhalf.
+        rate: Membrane.rate.
+        ih_rate: Membrane.ih_rate.
 
     Returns:
         (V, vlk) at the steady state.
@@ -1104,9 +1371,17 @@ def _solve_rest(
         """Returns the state and a stand-in Membrane for unknowns u."""
         v = np.concatenate([[v0], u[1:]])
         lk = np.concatenate([u[:1], vlk[1:]])
-        x = np.concatenate([v, *_gates_at(v, na_vhalf)])
+        x = np.concatenate([v, *_gates_at(v, na_vhalf, na_act, ih_vhalf)])
         mem = types.SimpleNamespace(
-            g_na=morph.g_na, g_klt=g_klt, na_vhalf=na_vhalf, vlk=lk
+            g_na=morph.g_na,
+            g_klt=g_klt,
+            na_vhalf=na_vhalf,
+            vlk=lk,
+            na_act_vhalf=na_act[0],
+            na_act_k=na_act[1],
+            ih_vhalf=ih_vhalf,
+            rate=rate,
+            ih_rate=ih_rate,
         )
         return x, mem
 
@@ -1330,14 +1605,21 @@ def _rhs(
 
     act_m, act_h, act_p, act_w, act_z, act_a = active
     # sources for each time constant are in constants.py
-    d[1] = (C.minf(V) - m) / C.taum(V) if act_m else 0.0
+    q = mem.rate  # the Q10 factor; 1.0 leaves every bit as it was
+    d[1] = (
+        (C.minf(V, mem.na_act_vhalf, mem.na_act_k) - m) / C.taum(V, q)
+        if act_m
+        else 0.0
+    )
     d[2] = (
-        (C.hinf(V, mem.na_vhalf) - h) / C.tauh(V) if act_h else 0.0
+        (C.hinf(V, mem.na_vhalf) - h) / C.tauh(V, q) if act_h else 0.0
     )  # per-compartment midpoint
-    d[3] = (C.pinf(V) - p) / C.taup(V) if act_p else 0.0
-    d[4] = (C.winf(V) - w) / C.tauw(V) if act_w else 0.0
-    d[5] = (C.zinf(V) - z) / C.tauz(V) if act_z else 0.0
-    d[6] = (C.ainf(V) - a) / C.taua(V) if act_a else 0.0
+    d[3] = (C.pinf(V) - p) / C.taup(V, q) if act_p else 0.0
+    d[4] = (C.winf(V) - w) / C.tauw(V, q) if act_w else 0.0
+    d[5] = (C.zinf(V) - z) / C.tauz(V, q) if act_z else 0.0
+    d[6] = (
+        (C.ainf(V, mem.ih_vhalf) - a) / C.taua(V, mem.ih_rate) if act_a else 0.0
+    )
     return out
 
 
@@ -1493,8 +1775,8 @@ def mso_axon(
     mem = mem or membrane(v0, morph=morph)
     if mem.morph_key != morph.key:
         raise ValueError(
-            "mem was built for a different morphology; "
-            "pass morph= to membrane()"
+            "mem was built for a different morphology; pass morph= to "
+            "membrane(), and mem alone or with morph=mem.morph here"
         )
     n = morph.n
     y0 = initial_state(morph, mem, v0)
