@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+import msoaxon
 from msoaxon import multi
 
 ARRAYS = (
@@ -83,18 +84,17 @@ def test_distal_shortening_vector_is_per_pair():
     np.testing.assert_array_equal(m.sa[4:45:2], multi.LUMPED.sa[4:45:2])
 
 
-def test_ais_start_appends_a_hillock_and_keeps_indices():
+def test_ais_start_inserts_a_hillock_in_physical_order():
     m = multi.with_axon(ais_start=5.0)
-    assert m.n == 46 and not m.chain
-    assert m.labels[:45] == multi.LUMPED.labels and m.labels[45] == "hillock"
-    assert m.g_na[45] == 0.0 and m.g_kht[45] == 0.0
+    assert m.n == 46 and m.chain
+    assert m.labels == ["soma", "hillock", *multi.LUMPED.labels[1:]]
+    assert m.g_na[1] == 0.0 and m.g_kht[1] == 0.0
     for name in ("sa", "cap", "g_na", "g_kht", "g_klt", "g_h", "g_lk"):
-        np.testing.assert_array_equal(
-            getattr(m, name)[:45], getattr(multi.LUMPED, name)
-        )
-    edges = set(zip(m.parent.tolist(), m.child.tolist(), strict=True))
-    assert (0, 45) in edges and (45, 1) in edges and (0, 1) not in edges
-    assert len(edges) == 45
+        got, want = getattr(m, name), getattr(multi.LUMPED, name)
+        assert got[0] == want[0], name
+        np.testing.assert_array_equal(got[2:], want[1:], err_msg=name)
+    np.testing.assert_array_equal(m.parent, np.arange(45))
+    np.testing.assert_array_equal(m.child, np.arange(1, 46))
 
 
 @pytest.mark.parametrize(
@@ -164,14 +164,14 @@ def test_g_ax_follows_the_geometry_chain():
 
 def test_g_ax_with_hillock_edges():
     m = multi.with_axon(ais_start=5.0, ais_length=24.0, diameter=0.7)
-    assert m.sa[45] == pytest.approx(np.pi * 1.64 * 5.0)
+    assert m.sa[1] == pytest.approx(np.pi * 1.64 * 5.0)
     lengths = np.concatenate(
-        [[multi.C.L[0], 12.0, 12.0], np.tile([100.0, 1.0], 21), [5.0]]
+        [[multi.C.L[0], 5.0, 12.0, 12.0], np.tile([100.0, 1.0], 21)]
     )
     diams = np.full(46, 0.7)
-    diams[[0, 1]] = m.sa[[0, 1]] / (np.pi * lengths[[0, 1]])
-    diams[45] = 1.64
-    edges = [(0, 45), (45, 1)] + [(k, k + 1) for k in range(1, 44)]
+    diams[[0, 2]] = m.sa[[0, 2]] / (np.pi * lengths[[0, 2]])
+    diams[1] = 1.64
+    edges = [(k, k + 1) for k in range(45)]
     want = _g_ax_by_hand(lengths, diams, edges)
     np.testing.assert_allclose(m.g_ax, want, rtol=1e-12)
 
@@ -181,16 +181,16 @@ def test_ais_length_sets_ais_areas():
     long = multi.with_axon(ais_length=40.0)
     assert short.sa[1] < multi.LUMPED.sa[1] < long.sa[1]
     assert short.sa[2] == pytest.approx(np.pi * 5.0 * 0.66)
-    assert multi.with_axon(ais_start=3.0).sa[1] == multi.LUMPED.sa[1]
+    assert multi.with_axon(ais_start=3.0).sa[2] == multi.LUMPED.sa[1]
 
 
 def test_node_diameter_and_hillock_channels():
     m = multi.with_axon(diameter=1.0, node_length=2.0, ais_start=5.0)
-    np.testing.assert_allclose(m.sa[np.arange(4, 45, 2)], np.pi * 2.0 * 1.0)
-    assert m.g_klt[45] == multi.C.G_KLT[1] > 0
-    assert m.g_h[45] == multi.C.G_H[1] > 0
-    assert m.g_lk[45] == multi.C.G_LK[1]
-    assert m.cap[45] == multi.LUMPED.cap[1]
+    np.testing.assert_allclose(m.sa[np.arange(5, 46, 2)], np.pi * 2.0 * 1.0)
+    assert m.g_klt[1] == multi.C.G_KLT[1] > 0
+    assert m.g_h[1] == multi.C.G_H[1] > 0
+    assert m.g_lk[1] == multi.C.G_LK[1]
+    assert m.cap[1] == multi.LUMPED.cap[1]
 
 
 def test_membrane_dendrite_scale_rejects_hillock_morphology():
@@ -198,8 +198,9 @@ def test_membrane_dendrite_scale_rejects_hillock_morphology():
     with pytest.raises(ValueError):
         multi.membrane(-68.0, morph=m, dendrite_klt_scale=3.0)
     mem = multi.membrane(-68.0, morph=m, ais_klt_scale=3.0)
-    assert mem.g_klt[1] == pytest.approx(3.0 * m.g_klt[1])
-    assert mem.g_klt[45] == m.g_klt[45]
+    np.testing.assert_allclose(mem.g_klt[2:4], 3.0 * m.g_klt[2:4])
+    assert mem.g_klt[1] == m.g_klt[1]  # the hillock is not the AIS
+    assert mem.g_klt[0] == m.g_klt[0] and mem.g_klt[5] == m.g_klt[5]
 
 
 def test_hold_ld_scales_length_with_diameter_only():
@@ -222,8 +223,10 @@ def test_a_spike_travels_through_non_default_geometry(ais_start):
     )
     assert y.shape == (len(t), 7 * m.n)
     assert np.isfinite(y).all()
-    # 0-based columns 8 and 44 are compartments 9 and 45 (the last)
-    assert y[:, 8].max() > 0 and y[:, 44].max() > 0
+    # the same node 4 and last node at either ais_start, whatever their number
+    shift = int(ais_start > 0)
+    assert m.labels[8 + shift] == "node" and m.labels[44 + shift] == "node"
+    assert y[:, 8 + shift].max() > 0 and y[:, 44 + shift].max() > 0
 
 
 @pytest.mark.parametrize("ais_start", [0.0, 4.0])
@@ -241,3 +244,37 @@ def test_non_default_geometry_runs_through_mso_axon(ais_start):
     )
     assert y.shape == (len(t), 7 * m.n)
     assert np.isfinite(y).all()
+
+
+def test_the_last_node_of_a_hillock_chain_can_be_the_compared_compartment():
+    mem = multi.membrane(-68.0, morph=multi.with_axon(ais_start=4.0))
+    t, _ = multi.mso_axon(
+        "step", 2, 4, 0.0, 46, "active-full", 3, -68.0, 1, mem=mem
+    )
+    assert t[-1] == 3
+    with pytest.raises(ValueError, match="node must be"):
+        multi.mso_axon(
+            "step", 2, 4, 0.0, 47, "active-full", 3, -68.0, 1, mem=mem
+        )
+    with pytest.raises(ValueError, match="node must be"):
+        multi.mso_axon("step", 2, 4, 0.0, 46, "active-full", 3, -68.0, 1)
+
+
+def test_a_rebalanced_hillock_chain_holds_rest():
+    m = multi.with_axon(ais_start=4.0)
+    mem = multi.membrane(-68.0, morph=m, rebalance_rest=True)
+    _, y = multi.mso_axon(
+        "step", 2, 4, 0.0, 3, "active-full", 20, -68.0, 1, mem=mem
+    )
+    assert np.abs(y[:, 0] + 68.0).max() < 1e-3
+
+
+def test_fast_mode_matches_exact_on_a_hillock_chain():
+    pytest.importorskip("msoaxon_fast", reason="needs the fast extra")
+    mem = multi.membrane(-68.0, morph=multi.with_axon(ais_start=4.0))
+    args = ("EPSGpair", 2, 2.2, 100.0, 9, "active-full", 8, -68.0, 1)
+    t0, y0 = msoaxon.mso_axon(*args, mem=mem, mode="exact")
+    t1, y1 = msoaxon.mso_axon(*args, mem=mem, mode="fast")
+    np.testing.assert_allclose(
+        np.interp(t0, t1, y1[:, 10]), y0[:, 10], rtol=1e-2, atol=0.5
+    )

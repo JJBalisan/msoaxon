@@ -450,8 +450,8 @@ def with_axon(
     """Builds the 45-compartment chain with the axon geometry as knobs.
 
     At the defaults the arrays are bit-identical to LUMPED's (a test
-    pins it), so the golden traces hold. Compartments keep their
-    meaning: 1 soma, 2-3 AIS, then 21 internode/node pairs.
+    pins it), so the golden traces hold. Compartments follow the axon
+    from the soma out: 1 soma, 2-3 AIS, then 21 internode/node pairs.
 
     The AIS keeps msoAxon.m's two equal compartments, so ais_length is
     split in half. Its first compartment tapers from the proximal
@@ -462,12 +462,14 @@ def with_axon(
     LUMPED; node and internode densities are per um^2, so a longer node
     holds more channels. Axial resistivity stays 100 Ohm cm.
 
-    ais_start > 0 appends one hillock compartment (cylinder of the
+    ais_start > 0 inserts one hillock compartment (cylinder of the
     proximal AIS diameter, `ais_start` um long, with the AIS's leak,
-    KLT and h densities and no Na or KHT) as compartment 46, wired
-    soma -> hillock -> AIS, so compartments 1-45 keep their meaning as
-    with with_dendrites(). That is a modelling choice, not a measured
-    one.
+    KLT and h densities and no Na or KHT) between the soma and the AIS.
+    The numbering stays physical, so it becomes compartment 2 and every
+    later compartment moves up by one (AIS 3-4, the last node 46):
+    compare sites across ais_start by Morphology.labels, or add one to
+    the number. The hillock's channels are a modelling choice, not a
+    measured one.
 
     Args:
         internode_length: Internode length [um].
@@ -487,7 +489,7 @@ def with_axon(
             False (default) leaves the length free.
 
     Returns:
-        A Morphology; chain is True unless ais_start > 0.
+        A Morphology, always an unbranched chain.
 
     Raises:
         ValueError: If a length, diameter, scale or myelin_cap is not
@@ -552,19 +554,17 @@ def with_axon(
     labels = LUMPED.labels
     n = N
     if ais_start > 0:
-        hill_sa = np.pi * _AIS_BASE_DIAM * ais_start
-        sa = np.append(sa, hill_sa)
-        length = np.append(length, ais_start)
-        cap = np.append(cap, _SOMA_CM * 1e6 * 1e-8)
-        g_na = np.append(g_na, 0.0)
-        g_kht = np.append(g_kht, 0.0)
-        g_klt = np.append(g_klt, C.G_KLT[1])
-        g_h = np.append(g_h, C.G_H[1])
-        g_lk = np.append(g_lk, C.G_LK[1])
-        parent = np.concatenate([[0, N], np.arange(1, N - 1)])
-        child = np.concatenate([[N, 1], np.arange(2, N)])
-        labels = [*labels, "hillock"]
+        sa = np.insert(sa, 1, np.pi * _AIS_BASE_DIAM * ais_start)
+        length = np.insert(length, 1, ais_start)
+        cap = np.insert(cap, 1, _SOMA_CM * 1e6 * 1e-8)
+        g_na = np.insert(g_na, 1, 0.0)
+        g_kht = np.insert(g_kht, 1, 0.0)
+        g_klt = np.insert(g_klt, 1, C.G_KLT[1])
+        g_h = np.insert(g_h, 1, C.G_H[1])
+        g_lk = np.insert(g_lk, 1, C.G_LK[1])
         n = N + 1
+        parent, child = np.arange(n - 1), np.arange(1, n)
+        labels = ["soma", "hillock", *labels[1:]]
     l_cm = length * 1e-4
     xa_cm = np.pi * (sa / (2 * np.pi * length)) ** 2 * 1e-8
     g_ax = (2 / R_AXIAL) / (
@@ -594,7 +594,7 @@ def with_axon(
         parent=parent,
         child=child,
         g_ax=g_ax,
-        chain=ais_start <= 0,
+        chain=True,
         jac=LUMPED.jac
         if ais_start <= 0
         else _tree_jac_sparsity(n, parent, child),
@@ -977,7 +977,7 @@ def membrane(
         )
     g_klt = morph.g_klt.copy()
     g_klt[0] *= soma_klt_scale
-    g_klt[1:3] *= ais_klt_scale
+    g_klt[np.isin(morph.labels, "AIS")] *= ais_klt_scale
     g_klt[N:] *= dendrite_klt_scale
     # stored negated, as C.hinf's vhalf (exp((V + vhalf) / 7.77)) expects
     na_vhalf = np.full(morph.n, 62.5)
@@ -1470,6 +1470,7 @@ def mso_axon(
         stop=stop,
         stim_types=MSO_STIM_TYPES,
         n_max=morph.n,
+        node_max=C.N_CPT + ("hillock" in morph.labels),
     )
     _common.check_times(t_end, max_step)
     if stim_type == "EPSGbilateral" and not (

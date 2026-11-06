@@ -1089,9 +1089,11 @@ returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
 Choices to know: channel densities are per µm², so a longer node holds more
 channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
 (scaled with `diameter / 0.66`), so its frustum area is not exact for any
-diameter; `ais_start > 0` appends a hillock as compartment 46 (the AIS's
-leak, KLT and h densities, no Na or KHT), a modelling choice
-rather than a measured one. Axial resistivity stays 100 Ω·cm.
+diameter; `ais_start > 0` inserts a hillock between the soma and the AIS (the
+AIS's leak, KLT and h densities, no Na or KHT), a modelling choice rather than a
+measured one. The numbering stays physical: the hillock is compartment 2, the
+AIS 3-4 and the last node 46, so a site keeps its label but its number moves up
+by one against `ais_start=0`. Axial resistivity stays 100 Ω·cm.
 
 ## Dendrites
 

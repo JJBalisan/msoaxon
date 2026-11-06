@@ -47,13 +47,14 @@ def check_args(
     stop: float,
     stim_types: tuple[str, ...] = STIM_TYPES,
     n_max: int = C.N_CPT,
+    node_max: int = C.N_CPT,
 ) -> None:
     """Rejects inputs that numpy's negative indexing would accept silently.
 
     Args:
         stim_type: The stimulus name; must be one of `stim_types`.
         model_type: The channel set; must be one of MODEL_TYPES.
-        node: The compared compartment, 1-indexed, min_node..N_CPT.
+        node: The compared compartment, 1-indexed, min_node..node_max.
         input_node: Where the stimulus enters, 1-indexed, 1..n_max.
         min_node: The smallest allowed `node` (2 in two_cpt, where node
             1 would be the soma itself).
@@ -62,6 +63,7 @@ def check_args(
             "ramp" and "ramp2" need stop > start.
         stim_types: The stimulus names the calling model accepts.
         n_max: The number of compartments an input may enter.
+        node_max: The last compartment `node` may name.
 
     Raises:
         ValueError: If any argument is out of range or unknown, or a
@@ -73,9 +75,9 @@ def check_args(
         raise ValueError(
             f"unknown model type {model_type!r}; expected one of {MODEL_TYPES}"
         )
-    if not min_node <= node <= C.N_CPT:
+    if not min_node <= node <= node_max:
         raise ValueError(
-            f"node must be {min_node}..{C.N_CPT} (1-indexed), got {node}"
+            f"node must be {min_node}..{node_max} (1-indexed), got {node}"
         )
     if not 1 <= input_node <= n_max:
         raise ValueError(
