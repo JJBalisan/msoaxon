@@ -90,8 +90,8 @@ two_params! {
     iklt0_2 = "IKLT0_2", z_rest = "z_rest",
     /// h conductances, reversal and resting currents.
     g_h1 = "gh1", g_h2 = "gh2", v_h = "Vh", ih0_1 = "Ih0_1", ih0_2 = "Ih0_2",
-    /// The soma's KHT conductance and reversal.
-    g_kht = "gKHT", v_k = "VK",
+    /// The soma's KHT conductance, reversal and resting current.
+    g_kht = "gKHT", v_k = "VK", ikht0 = "IKHT0",
     /// The compartment the stimulus enters: 1 the soma, else the axon.
     iapp_loc = "IappLoc",
 }
@@ -611,7 +611,7 @@ impl TwoCptRhs {
             <[f64; NSTATES]>::try_from(&x[..NSTATES]).unwrap();
         let z = p.z_rest;
 
-        let ikht = p.g_kht * kp * (v1 - p.v_k);
+        let ikht = p.g_kht * kp * (v1 - p.v_k) - p.ikht0;
         let ina1 = p.g_na1 * m1.powf(4.0) * (c.na_open_h * h1 + c.na_open_floor) * (v1 - p.e_na)
             - p.ina0_1;
         let ilk1 = p.g_lk1 * (v1 - p.e_lk);
@@ -787,6 +787,7 @@ pub(crate) mod tests {
             ("Ih0_2", -0.7),
             ("gKHT", 11.0),
             ("VK", -90.0),
+            ("IKHT0", -3.0),
             ("IappLoc", iapp_loc),
             ("couple12", 0.8),
         ]

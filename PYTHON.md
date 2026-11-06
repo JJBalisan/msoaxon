@@ -441,16 +441,17 @@ and the Newton matrix goes to faer's sparse LU, the tree solver's shape being
 the 45-compartment model's. `two_cpt` integrates at `TwoCpt.m`'s
 `RTOL = ATOL = 1e-6`, not 1e-8, so native and exact agree less closely than for
 the 45-compartment model: every two-compartment golden trace passes in fast and
-native, but at 151 interpolated samples three axonal-input runs
-(`tests/test_fast.py`, `TWO_DRIFT`) exceed rtol 1e-4 / atol 5e-3 mV by up to
-2.3× (0.0125 mV) at one point on an upstroke, and a spike stop lands 4.6e-6 ms
-from scipy's. Against a run at rtol 1e-10 each mode is off by the same order at
-its own steps (0.0015 to 0.0044 mV). Run as the default, native also moved four
-pinned results outside their tests' tolerances (the Goldwyn passive `tau`,
-0.3341 against 0.34 +/- 0.005; a sine `BinarySearch.m` point, 11544.8 against
-11541.1 +/- 2.3 pA; a passive-step peak, 4.8702 against 4.8758 at rtol 1e-3;
-a somatic spike-table point, 12.93 against 13 +/- 0.06), so `two_cpt`'s default
-stays `"exact"` until that is decided.
+native, but at 151 interpolated samples a few runs (`tests/test_fast.py`,
+`TWO_DRIFT`) sit either side of rtol 1e-4 / atol 5e-3 mV at one point on an
+upstroke (the sine at the soma is 1.24× over, 0.0134 mV), and a spike stop lands
+4.6e-6 ms from scipy's. Against an exact run at rtol 1e-10 both modes are off by
+the same order at their own steps (exact 0.0087 to 0.0284 mV, native 0.0083 to
+0.0212), and at 1e-8 the four runs are within tolerance. Run as the default,
+native also moves three pinned results outside their tests' tolerances (the
+Goldwyn passive `tau`, 0.3341 against 0.34 +/- 0.005; a sine `BinarySearch.m`
+point, 11559.4 against 11566.8 +/- 2.3 pA; a passive-step peak, 4.8793 against
+4.8728 at rtol 1e-3), so `two_cpt`'s default stays `"exact"` until that is
+decided.
 
 Speed of the 20 searches of `scripts/benchmark_search.py` (one pass at rel_tol
 1e-4, the reference not recomputed; Apple M1 Max, Python 3.13; two repeats
