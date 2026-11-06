@@ -107,8 +107,8 @@ mV. Each gate relaxes as dx/dt = (x∞(V) - x) / τx(V).
 | KLT, z | 0.73 / (1 + exp((V + 67) / 6.16)) + 0.27 | 170 / (5 exp((V + 60) / 10) + exp(-(V + 70) / 8)) + 10.7 | Mathews et al. 2010 |
 | h current, a | 1 / (1 + exp(0.1 (V + 80.4))) | 3^(-0.3) (79 + 417 exp(-(V + 61.5)² / 800)) | Baumann et al. 2013; 32 to 35 °C with Q10 = 3 |
 
-Currents, as `multi._rhs` writes them (`two._rhs` is the same with each
-current's value at rest subtracted, below):
+Currents, as `multi._rhs` writes them (`two._rhs` is the same with the Na,
+KLT and h currents' value at rest subtracted; KHT and leak are not, below):
 
 | Current | Expression | Reversal |
 |---|---|---|
@@ -120,10 +120,12 @@ current's value at rest subtracted, below):
 
 The 0.007 is the non-inactivating Na fraction (code). The h current is linear
 in the activation gate, as in Rothman & Manis 2003, since neither Lehnert et
-al. 2014 nor Baumann et al. 2013 give a power (code comment). Which gates
-evolve depends on `model_type` (`multi.ACTIVE_GATES`; `two.get_params` for the
-two-compartment model); a gate that does not evolve holds its initial value
-and its channel's conductance is 0 or, for `"passive"`, absent.
+al. 2014 nor Baumann et al. 2013 give a power (code comment). `model_type`
+acts differently in the two models. In `mso_axon`, it only freezes gates
+(`multi.ACTIVE_GATES`): a gate that is off holds `_GATE0` and its channel still
+conducts at that fixed open fraction, so `"passive"` is not leak-only. In
+`two_cpt`, every gate evolves (z alone is frozen, always) and a switched-off
+channel has conductance 0 (`two.get_params`).
 
 ### 45-compartment model (`multi.mso_axon`, `msoAxon.m`)
 
@@ -132,7 +134,7 @@ and its channel's conductance is 0 or, for `"passive"`, absent.
 | Type | Conductance-based, unbranched cable, Hodgkin-Huxley-style channels | Lehnert et al. 2014 (equations, unless the code notes otherwise) |
 | Compartments | 45: 1 soma, 2 AIS, then 21 internode-node pairs (4 = internode, 5 = node, ...) | `Constants.m` |
 | State | 315 = 45 × [V, m, h, p, w, z, a], column-major | code |
-| Initial state | V = v0 everywhere; (m, h, p, w, z, a) = (0.12, 0.67, 0.0, 0.28, 0.67, 0.22), the steady state at -68 mV rounded to two decimals, so the rest drifts about 0.9 mV | `msoAxon.m` (`_GATE0`) |
+| Initial state | V = v0 everywhere; (m, h, p, w, z, a) = (0.12, 0.67, 0.0, 0.28, 0.67, 0.22), the steady state at -68 mV rounded to two decimals, so the far axon drifts about 0.9 mV (compartment 45; the soma moves under 0.3 mV) | `msoAxon.m` (`_GATE0`) |
 | Rest | `membrane(rebalance_rest=True)` instead sets each leak reversal so the soma rests at v0 from steady-state gates, and the axon at `axon_rest` (default -68 mV) | code |
 | Default analysis v0 | -68 mV | code |
 | Integration | scipy BDF, RTOL = ATOL = 1e-8, max step 0.1 t_end, restarted at stimulus on and off times | `msoAxon.m` (`ode15s` options) |
@@ -233,7 +235,7 @@ for compartments 1 to 45 except as listed here. Arguments and defaults:
 | Dendrite R_a (`dendrite_ra`) | 100 Ω·cm (Mathews et al. 2010 used 200); the soma and axon keep 100 | code; see "Dendritic axial resistivity" |
 | Attachment | Compartment 46 and 51 connect to the soma (1); segments chain outward | code |
 | `dendrite_klt_scale` | 1.0 | Multiplies dendritic g_KLT (`membrane`) |
-| New stimulus `EPSGbilateral` | EPSG at `input_node` at `start`, at `input_node2` at `stop` | code |
+| New stimulus `EPSGbilateral` | EPSG at `input_node` at `start`, at `input_node2` at `stop`; also runs on the lumped 45-compartment model, but `two_cpt` rejects it | code |
 
 ### Stimuli
 
@@ -474,7 +476,7 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
 - **Constants:** `Area.mat`, `Fractions.mat` and `Coupling.mat` match the Python
   values to 1e-12 (`tests/`).
 - **Rest:** with no input the 2-CPT model stays at `v0` to 1e-6 mV. The 45-CPT
-  model settles about 0.9 mV away from it. The same happens in MATLAB, since
+  model's far axon (compartment 45) settles about 0.9 mV away from it, the soma under 0.3 mV. The same happens in MATLAB, since
   `msoAxon.m` starts from rounded gating values and doesn't subtract resting
   currents.
 - **EPSGpair thresholds vs `EPSGpair_Thresholds*.jpg`:** every plotted value is
@@ -1030,7 +1032,7 @@ The defaults are `msoAxon.m`'s membrane, unchanged.
 
 `uv run scripts/resonance.py` reproduces this; `figures/resonance/` gets the
 curves and a JSON. `--quick` is a smoke test, `--mode native` is about 8× faster
-and agrees within solver tolerance.
+and agrees to the cross-platform contract (`rtol=1e-4`, `atol=5e-3` mV).
 
 Mikiel-Hunter, Kotak & Rinzel 2016
 ([doi](https://doi.org/10.1371/journal.pcbi.1005166)) give three frequencies for
