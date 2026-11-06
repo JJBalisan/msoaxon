@@ -147,6 +147,37 @@ def configs():
             None,
             morph,
         )
+    # the gate knobs (#82): every one off its default, in Python and in Rust
+    knobs = {
+        "ih_density_scale": 2.5,
+        "ih_vhalf": -72.0,
+        "ih_tau_scale": 0.6,
+        "na_act_vhalf": -52.0,
+        "na_act_slope": 8.5,
+        "temperature": 27.0,
+        "q10": 2.4,
+        "q10_conductance": 1.3,
+    }
+    # the morph is each mem's own: ih_density_scale and dendrite_kht_scale
+    # live in mem.morph, so only it carries them into either right-hand side
+    lumped_knobbed = multi.membrane(
+        -60.0, soma_klt_scale=3, rebalance_rest=True, **knobs
+    )
+    out["mem/gate-knobs"] = (
+        STIMULI["EPSGpair"],
+        "active-full",
+        lumped_knobbed,
+        lumped_knobbed.morph,
+    )
+    dendrite_knobbed = multi.membrane(
+        -68.0, morph=D, dendrite_kht_scale=0.7, **knobs
+    )
+    out["dendrites/gate-knobs"] = (
+        bilateral,
+        "active-full",
+        dendrite_knobbed,
+        dendrite_knobbed.morph,
+    )
     out["dendrites/mem"] = (
         bilateral,
         "active-KLT+H",
@@ -970,6 +1001,37 @@ def test_native_matches_exact_with_a_synaptic_input_off_the_soma(
             rtol=1e-4,
             atol=5e-3,
         )
+
+
+@needs_ext
+def test_native_and_fast_honour_the_gate_knobs(quiet_native, monkeypatch):
+    # #82: the knobs reach the Rust right-hand side through the gating
+    # constants; a run at 27 C with shifted Na activation and a slower, more
+    # depolarised h must agree with the numpy reference, and differ from the
+    # default membrane (it does not silently ignore them)
+    monkeypatch.setitem(_fast._STATE, "warned", True)
+    mem = multi.membrane(
+        -68.0,
+        ih_density_scale=2.0,
+        ih_vhalf=-72.0,
+        na_act_vhalf=-50.0,
+        temperature=27.0,
+    )
+    args = ("EPSGpair", 5, 5.1, 30, 3, "active-full", 8, -68.0, 1)
+    t_e, x_e = multi.mso_axon(*args, mem=mem, mode="exact")
+    t_d, x_d = multi.mso_axon(*args, mode="exact")
+    times = np.linspace(0, 8, 81)
+
+    def at(t, x, col):
+        return np.interp(times, t, x[:, col])
+
+    for mode in ("fast", "native"):
+        t_m, x_m = multi.mso_axon(*args, mem=mem, mode=mode)
+        for col in (0, 2, 9):
+            np.testing.assert_allclose(
+                at(t_m, x_m, col), at(t_e, x_e, col), rtol=1e-4, atol=5e-3
+            )
+    assert np.abs(at(t_e, x_e, 0) - at(t_d, x_d, 0)).max() > 1e-3
 
 
 @needs_ext
