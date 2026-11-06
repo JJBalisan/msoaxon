@@ -269,16 +269,21 @@ def _channels(
     return klt1, klt2, h1, h2, na1, gNa2
 
 
-def _somatic_kht(model_type: str, gKHT: float | None) -> float:
+def _somatic_kht(
+    model_type: str, gKHT: float | None, gTot1: float, Vr: float
+) -> float:
     """Resolves the somatic KHT conductance for a model type.
 
-    The default is Lehnert et al 2014's somatic density over the soma's
-    area, as in the 45-compartment model. TwoCpt.m has 0.1 / SA(1) * 1000
-    (0.0114 nS), which left KHT with no effect.
+    The default comes from the resting fractions, as every other
+    conductance here does: KHT's share of the 45-compartment soma's resting
+    conductance, at gTot1 and Vr. TwoCpt.m has 0.1 / SA(1) * 1000 (0.0114
+    nS), which left KHT with no effect.
 
     Args:
         model_type: The channel set.
         gKHT: The conductance asked for [nS]; None: the default.
+        gTot1: The soma's total resting conductance [nS].
+        Vr: The resting potential [mV].
 
     Returns:
         The conductance [nS]; 0 for a model type without KHT.
@@ -290,7 +295,30 @@ def _somatic_kht(model_type: str, gKHT: float | None) -> float:
         raise ValueError(f"gKHT must be >= 0, got {gKHT}")
     if model_type not in ("active-KHT", "active-full"):
         return 0.0
-    return float(C.G_KHT[0] * C.SA[0]) if gKHT is None else gKHT
+    return float(C.KHT_FRAC[0] * gTot1 / C.pinf(Vr)) if gKHT is None else gKHT
+
+
+def _somatic_leak(shares: float, gKHT: float, gTot1: float, Vr: float) -> float:
+    """Returns what the channels leave of the soma's resting conductance.
+
+    Args:
+        shares: The KLT, h and Na fractions, summed.
+        gKHT: The KHT conductance [nS].
+        gTot1: The soma's total resting conductance [nS].
+        Vr: The resting potential [mV].
+
+    Returns:
+        The leak conductance [nS].
+
+    Raises:
+        ValueError: If that leaves a negative leak conductance.
+    """
+    glk1 = (1 - shares) * gTot1 - gKHT * C.pinf(Vr)
+    if glk1 < -1e-9 * gTot1:
+        raise ValueError(
+            "the soma's fractions and KHT leave it a negative leak conductance"
+        )
+    return glk1
 
 
 def get_params(
@@ -351,8 +379,9 @@ def get_params(
         gNa2: Axonal Na conductance [nS], >= 0; the lookup has a
             calibrated value for nodes 3 and 5 only.
         gKHT: Somatic KHT conductance [nS], >= 0, for the model types
-            that have KHT (default: 875, Lehnert et al 2014's density
-            over the soma's area).
+            that have KHT (default: its share of the resting conductance
+            in Lehnert et al 2014's densities, 823 nS at -68 mV and 156 at
+            -58). It takes its resting conductance from the leak.
         soma_na_vhalf: Somatic Na inactivation midpoint [mV]; Scott et
             al 2010 measured -77. gNa1 stays calibrated at the default
             (-62.5), so a shift changes how many channels are available
@@ -404,8 +433,6 @@ def get_params(
         node, model_type, klt1, klt2, h1, h2, na1, gNa2
     )
 
-    gKHT = _somatic_kht(model_type, gKHT)
-
     R1 = r1 * 1e-3  # input resistance to CPT1 [GOhm]
     Vrest = Elk = v0
     VK = EK = -90.0
@@ -427,7 +454,8 @@ def get_params(
     Vh = -35.0
     gh1 = h1 * gTot1 / C.ainf(Vr)
     gh2 = h2 * gTot2 / C.ainf(Vr)
-    glk1 = (1 - klt1 - h1 - na1) * gTot1
+    gKHT = _somatic_kht(model_type, gKHT, gTot1, Vr)
+    glk1 = _somatic_leak(klt1 + h1 + na1, gKHT, gTot1, Vr)
     glk2 = (1 - klt2 - h2) * gTot2
     # calibrated at the default V-half whatever soma_na_vhalf is
     gNa1 = na1 * gTot1 / C.na_open(C.minf(Vr), C.hinf(Vr))
@@ -824,7 +852,8 @@ def two_cpt(
         na1: Fraction that is Na, in [0, 1], at the default V-half;
             the soma only (the axon's Na is the conductance gNa2).
         gNa2: Axonal Na conductance [nS], >= 0.
-        gKHT: Somatic KHT conductance [nS], >= 0 (default: 875).
+        gKHT: Somatic KHT conductance [nS], >= 0 (default: from the
+            resting fractions, see get_params).
         soma_na_vhalf: Somatic Na inactivation midpoint [mV]; the Na
             conductance gNa1 stays calibrated at the default -62.5, and
             the resting Na current is subtracted at the shifted value,

@@ -302,10 +302,8 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
   20 of 28 values exactly. The other 8 are one possible output away (2q ≈ 2.3
   units, 2.5–5%). The curve shapes, the steep rise between 0.2 and 0.5 ms, and
   the plateau positions all agree. The misses aren't random: node-5
-  two-compartment sits one step low at three consecutive delays, and the node-3
-  multi-compartment plateau is 94.9 vs 97.3. The jpgs predate the `gKHT`
-  correction (see "Deliberate differences"); it swapped which two 2-compartment
-  points match, not how many. `tests/test_coverage.py` pins all
+  two-compartment sits one step low at four consecutive delays, and the node-3
+  multi-compartment plateau is 94.9 vs 97.3. `tests/test_coverage.py` pins all
   28 Python values, with the jpg values alongside.
   - Tightening the tolerances 1000× (1e-9, `max_step` 0.02) doesn't move any
     Python value, so the Python side is converged. The gap is either ode15s
@@ -374,11 +372,14 @@ reference these are history; they are not reverted.
   as part of the historical record.
 
 - **`gKHT` in the 2-CPT model:** `TwoCpt.m` has `0.1 / SA(1) * 1000`, which is
-  0.0114 nS against the 45-compartment soma's 0.1 nS/µm² × 8750 µm² = 875 nS, a
-  probable slip that left the model's KHT with no effect (12,750 nS of KLT sits
-  beside it). `two.py` uses 875 nS, and subtracts KHT's current at rest as it does
-  Na's, KLT's and h's, so rest stays at `v0`. `gKHT=` replaces it, and
-  `GOLDWYN_2019` sets 0, since Goldwyn's model has no KHT.
+  0.0114 nS against about 1e4 nS of KLT beside it, a probable slip that left the
+  model's KHT with no effect. `two.py` calculates it as it does every other
+  conductance, from its share of the 45-compartment soma's resting conductance
+  (0.46%): 823 nS at −68 mV, close to that soma's 875 nS, and 156 nS at −58 mV.
+  The leak gives up that share and KHT's current at rest is subtracted, as Na's,
+  KLT's and h's are, so the resting conductances still sum to the total and rest
+  stays at `v0`. `gKHT=` replaces it, and `GOLDWYN_2019` sets 0, since the parts
+  of Goldwyn's paper read for this describe Na and KLT only.
 
 ## Quirks kept on purpose
 
@@ -399,7 +400,12 @@ move the golden traces (`tests/golden_traces.json`) and the numbers here:
 - `TwoCpt.m` has calibrated axonal Na (`gNa2`) only for nodes 3 (119) and 5
   (25.5). Every other node gets the placeholder 140, so 2-CPT runs at those
   nodes use an uncalibrated value. `two_cpt(..., gNa2=...)`
-  replaces it.
+  replaces it. The calibration is also for −68 mV, where 118 nS reproduces the
+  45-compartment threshold at node 3. At −58 mV the model recalibrates its other
+  conductances but keeps 119 nS: its threshold is 28.5 nS against the rebalanced
+  45-compartment model's 66.6 nS, which about 63 nS would match. That is threshold
+  only, and the two −58 mV cells differ for other reasons too (see "Somatic
+  spike"), so it stays at 119 nS.
 - `Spiking.m` doesn't clear `reset` between columns.
 - `SA(2)` uses `1.66/3` where `0.66/2` was probably meant. The stored `Area.mat`
   was built with it.
@@ -594,26 +600,26 @@ default):
 | Model | Spike height | 50% | Coincident threshold | 3% window | Rheobase (100 ms step) |
 |---|---|---|---|---|---|
 | 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.1 → 199.7 µs (−0.7%) | 3785 → 3852 pA (+1.8%) |
-| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.82 → 48.33 nS (+1.1%) | 198.8 → 197.8 µs (−0.5%) | 3857 → 3887 pA (+0.8%) |
+| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 198.9 → 197.9 µs (−0.5%) | 3851 → 3881 pA (+0.8%) |
 | 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.2 → 166.5 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
-  217.5, 216.5 → 215.4 and 182.1 → 182.0 µs.
+  217.5, 216.6 → 215.5 and 182.1 → 182.0 µs.
 - The 0.5% windows narrow by 0.5–0.7% for the 45-compartment and `TwoCpt.m`
   models.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
   two models' criterion moves onto the steep upstroke, which raises their
   thresholds 1.0–1.8% and narrows their windows by at most 0.75%: about 2 µs on
   200, inside the 0.5% vs 3% margin ambiguity above. Goldwyn still narrows the
-  window by about 17% (−16.7% at 10 mV, −16.4% at 50%).
+  window by about 17% (−16.8% at 10 mV, −16.6% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
   Goldwyn). The coincident thresholds move more: up to 3%, and Goldwyn's by −13%
   at 25%, where the criterion is below its takeoff.
 - Goldwyn's rheobase is the same 100 ms step run with its calibration
-  (`v0=-58, r1=8.5, tau_est=0.34`). `somatic.fires`, `response`, `rheobase` and
+  (`v0=-58, r1=8.5, tau_est=0.34, gKHT=0`). `somatic.fires`, `response`, `rheobase` and
   `spike_amplitude` take a `model_kw` dict like `coincidence.threshold`, so the
   2070 pA is
-  `somatic.rheobase("two", v0=-58, model_kw={"r1": 8.5, "tau_est": 0.34})`.
+  `somatic.rheobase("two", v0=-58, model_kw={"r1": 8.5, "tau_est": 0.34, "gKHT": 0})`.
   `model_kw` also carries `mode="exact"`, `morph`, `model_type` and `max_step`;
   `mem=` stays as a shorthand for `model_kw={"mem": ...}`.
 - The searches take about 7% more simulations at 50%: the interpolation still
@@ -717,7 +723,7 @@ than the spike.
 |---|---|---|---|
 | 45-compartment (`msoAxon.m`) | 7.4 mV | 13.3 mV | 18.2 mV |
 | 45-compartment, KLT removed at soma + AIS, rest rebalanced (dendrotoxin) | 25.4 mV | 28.2 mV | 31.7 mV |
-| 2-compartment (`TwoCpt.m`) | 6.3 mV | 12.8 mV | 17.4 mV |
+| 2-compartment (`TwoCpt.m`) | 6.3 mV | 12.9 mV | 17.4 mV |
 
 - **The unmodified model already matches mature cells.** Lehnert et al. 2014
   report "∼10 mV" for their model too.
@@ -740,17 +746,17 @@ than the spike.
   d²V/dt², which lies on a solver sample, so it depends on where the solver put
   its steps. Rerunning with `max_step` 3, 4, 6 and 7 µs instead of 5 moves the
   dendrotoxin row by 0.00 mV and the multi rows by 0.00 mV; the 2-compartment
-  rows move by up to 0.06 mV (1.5×), 0.00 (2×) and 0.20 mV (3×) (remeasured in
-  exact mode: 6.372–6.435 and 17.576–17.775 mV; the other rows move by under
+  rows move by up to 0.06 mV (1.5×), 0.11 (2×) and 0.00 mV (3×) (remeasured in
+  exact mode: 6.349–6.410 and 12.855–12.967 mV; the other rows move by under
   0.0001 mV). `tests/test_somatic.py` gives each table point a tolerance from
-  its spread: 0.06 mV, but 0.1 and 0.25 mV for those two. Before
+  its spread: 0.06 mV, but 0.12 and 0.08 mV for those two. Before
   issue #56 the pick was the argmax of d²V/dt² of the linearly interpolated
   trace, a comb with a tooth at every solver step. The dendrotoxin row then
   moved 0.6–1.9 mV under the same changes (25.08 mV on macOS against 25.97 mV on
   Linux CI at 1.5×), and so did the controls (2-compartment 2× spread 12.8–17.6
   mV). The old control values (7.6 / 13.4 / 19.4 and 6.2 / 15.6 / 17.6 mV) were
   single teeth of that comb: the 2-compartment 2× value was 13.0 mV, not 15.6.
-  These spreads predate the `gKHT` correction, which moved that value to 12.8 mV.
+  That is before the `gKHT` correction, which moved it to 12.9 mV.
 - **Spikes driven by EPSG pairs** measure 9–11 mV at 2× threshold, against 8.5 ±
   1.3 mV in vivo (van der Heijden et al. 2013). Near threshold the EPSP and
   spike merge and the inflection is ambiguous.
@@ -800,10 +806,10 @@ than the spike.
 
   | 2-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
-  | −68, −62.5 | 33% | 3857 pA | 2.41 MΩ | 587 µs | 199 µs | 6.3 / 12.8 / 17.4 mV |
-  | −68, −77 | 76% | 4437 pA | 2.38 MΩ | 576 µs | 190 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
-  | −58, −62.5 | 64% | 1989 pA | 2.27 MΩ | 591 µs | 216 µs | no inflection (peak 13.1 / 16.2 / 21.4) |
-  | −58, −77 | 92% | 2061 pA | 2.25 MΩ | 584 µs | 213 µs | no inflection (peak 12.9 / 15.9 / 20.9) |
+  | −68, −62.5 | 33% | 3851 pA | 2.42 MΩ | 587 µs | 199 µs | 6.3 / 12.9 / 17.4 mV |
+  | −68, −77 | 76% | 4431 pA | 2.38 MΩ | 577 µs | 190 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
+  | −58, −62.5 | 64% | 1963 pA | 2.34 MΩ | 595 µs | 218 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
+  | −58, −77 | 92% | 2035 pA | 2.32 MΩ | 588 µs | 214 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
 
   - **Scott's V½ moves the rheobase and little else:** at −68 mV, −77 raises
     rheobase by 16% (45-compartment) and 15% (2-compartment), and moves Rin,
@@ -826,9 +832,9 @@ than the spike.
     is only reported where the rest is steady, and the steadiness check now
     watches every compartment, not only the soma.
   - **The models disagree at −58 mV, because they change different things:**
-    rheobase rises 39% in the 45-compartment model and falls 48% in the
+    rheobase rises 39% in the 45-compartment model and falls 49% in the
     2-compartment one; the window narrows from 200 to 137 µs in the first and
-    widens from 199 to 216 µs in the second. `two.get_params` recalibrates every
+    widens from 199 to 218 µs in the second. `two.get_params` recalibrates every
     conductance to the lookup's resting fractions at `v0` (node 3,
     `active-full`, −58 against −68 mV: `gNa1` 154 against 1645 nS, 0.09×;
     `gKLT1` 0.20×; `gh1` 2.33×), so its −58 mV cell is a different cell, with
@@ -854,6 +860,54 @@ than the spike.
   a positive real part, naming the compartments the growing mode lives in.
   `axon_rest=v0` rebalances the whole cable, which warns above about −60.5 mV.
 - `klt_to_leak`: replaces KLT by a leak, keeping rest (see Resonance below).
+- Gate knobs (#82), for the cell-to-cell diversity along the frequency map
+  that the papers name (Baumann et al. 2013; Bondy et al. 2021; Nabel et al.
+  2019), all defaulting to `msoAxon.m`'s literals so nothing moves:
+  - `ih_density_scale` (× gh everywhere), `ih_vhalf` (mV, default −80.4) and
+    `ih_tau_scale` (× the h activation time constant).
+  - `na_act_vhalf` (mV, default −46) and `na_act_slope` (mV, default 11): the
+    Na activation curve, the same in every compartment; the inactivation
+    midpoint stays `soma_na_vhalf`.
+  - `dendrite_kht_scale`: gKHT in the dendrites, the same along them, as a
+    multiple of the soma's 0.1 nS/µm² (default 0: KHT at the soma only, as in
+    Lehnert et al. 2014, so a multiple of their own density could not switch
+    it on). `with_dendrites()` morphologies only. Nabel et al. 2019 found
+    high-voltage-activated K channels more evenly spread than KLT, with clear
+    expression at distal dendrites, and modelled KHT with equal conductance in
+    every compartment: 0.5449 mS/cm² alongside KLT, a scale of about 0.054. The
+    gate stays Rothman & Manis's `pinf`, closed near rest; Nabel's own gate
+    activates near rest and is not modelled.
+  - `temperature` (°C, default 35), `q10` (default 3) and `q10_conductance`
+    (default 2): every gate's time constant is divided by
+    `q10 ** ((temperature − 35) / 10)`, on top of the Q10 factors `constants.py`
+    already holds for `taup` and `taua`, and every voltage-gated density is
+    multiplied by `q10_conductance ** ((temperature − 35) / 10)`. These are the
+    two values Rothman & Manis 2003 suggested for scaling to 38 °C, as summarised
+    by Manis & Campagnola 2018, who add that no data directly support them;
+    applying the second to every voltage-gated density is this repo's reading.
+    35 °C is `msoAxon.m`'s, so it changes no bit whatever the Q10s. The leak and
+    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so both are
+    assumptions, not data. Slower conduction also takes spike-site search past
+    `initiation.py`'s `LEAD`, tuned to the default 0.35-0.4 ms: below about 30 °C
+    the reported sites are wrong unless `lead` is raised to match.
+
+  The densities live in the morphology (as `klt_to_leak`'s leak does), so a
+  `mem` built with `ih_density_scale`, `dendrite_kht_scale` or a temperature
+  other than 35 °C carries its own morphology copy: pass `mem` alone, or `mem`
+  with `morph=mem.morph`. `membrane()` refuses a copy that already holds a
+  temperature's densities, or a second `ih_density_scale`. All three modes
+  honour every knob: the numbers the Rust right-hand side already takes from
+  Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
+  `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
+  every knob off its default, each config using its own `mem.morph`.
+  `describe()` names them.
+
+  The curve and density knobs (`na_act_*`, `ih_*`, `dendrite_kht_scale`)
+  move the model's rest. Without `rebalance_rest=True` the gates start at
+  `msoAxon.m`'s literals, so a model type that freezes a gate ignores the
+  matching knob (`na_act_*` in a frozen-m model) and the cell can drift from
+  `v0` or fire at zero input. Pair them with `rebalance_rest=True`, which
+  re-balances the leak at the new gates and keeps rest at `v0`.
 
 The defaults are `msoAxon.m`'s membrane, unchanged.
 
@@ -1085,6 +1139,34 @@ replaced by an equal leak at rest (`membrane(klt_to_leak="chord")`: each
 compartment's KLT conductance at rest added to its leak), and for the
 two-compartment model with KLT present and with the same substitution
 (`two_cpt(klt_to_leak="chord")`).
+
+## Axon geometry
+
+`mso_axon(..., mem=membrane(..., morph=with_axon(...)))` makes the axon's
+geometry a knob. `with_axon()` takes `internode_length` (100 µm), `diameter`
+(0.66 µm), `node_length` (1 µm), `ais_length` (20 µm, two equal compartments),
+`ais_start` (0), `myelin_cap` (0.01 µF/cm²), `internode_scale` and `node_scale`
+(a scalar or one multiplier per internode/node pair, for distal shortening) and
+`hold_ld` (True multiplies the internode length by `diameter / 0.66`, so L/d
+stays at `internode_length / 0.66`, 100 / 0.66 at the default length; False
+leaves it free). At the defaults it
+returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
+
+Choices to know: channel densities are per µm², so a longer node holds more
+channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
+(scaled with `diameter / 0.66`), so its frustum area is not exact for any
+diameter; `ais_start > 0` inserts a hillock between the soma and the AIS (the
+AIS's leak, KLT and h densities, no Na or KHT), a modelling choice rather than a
+measured one. The numbering stays physical: the hillock is compartment 2, the
+AIS 3-4 and the last node 46, so a site keeps its label but its number moves up
+by one against `ais_start=0`. The analyses' default `node=3` is the distal AIS at
+`ais_start=0` and the proximal AIS beyond it, which changes threshold by 11% and
+spike height by 58%, so they warn: compare `node=4` there, and go by
+`Morphology.labels` across a sweep. `spiking()` and the plots still read the
+45-compartment layout, so they are not valid on a hillock chain. Longer axons
+also take the spike-site search past `initiation.py`'s `LEAD`, tuned to the
+default 0.35-0.4 ms conduction: raise `lead` with the conduction time. Axial
+resistivity stays 100 Ω·cm.
 
 ## Dendrites
 

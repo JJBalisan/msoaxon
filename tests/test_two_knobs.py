@@ -363,11 +363,26 @@ def test_the_slope_below_the_klt_reversal_raises_before_any_run(no_run):
         run(*args, klt_to_leak="slope")
 
 
-def test_somatic_kht_is_the_45_compartment_somas_conductance():
-    p = two.get_params(-68.0, 3, 1, "active-full")
-    assert p.gKHT == C.G_KHT[0] * C.SA[0] == 875.0
-    assert two.get_params(-68.0, 3, 1, "active-KHT").gKHT == 875.0
-    assert two.get_params(-68.0, 3, 1, "passive").gKHT == 0.0
+@pytest.mark.parametrize("v0, gkht", [(-68.0, 822.6), (-58.0, 155.7)])
+def test_somatic_kht_comes_from_the_resting_fractions(v0, gkht):
+    p = two.get_params(v0, 3, 1, "active-full")
+    assert p.gKHT == pytest.approx(gkht, abs=0.05)
+    assert p.gKHT * C.pinf(v0) == pytest.approx(C.KHT_FRAC[0] * p.gTot1)
+    assert two.get_params(v0, 3, 1, "passive").gKHT == 0.0
+
+
+@pytest.mark.parametrize("v0", [-68.0, -58.0])
+@pytest.mark.parametrize("kw", [{}, {"gKHT": 10.0}, {"gKHT": 0.0}])
+def test_the_somas_resting_conductances_sum_to_its_total(v0, kw):
+    p = two.get_params(v0, 3, 1, "active-full", **kw)
+    chords = (
+        p.gKHT * C.pinf(v0)
+        + p.glk1
+        + p.gKLT1 * C.winf(v0) ** 4 * C.zinf(v0)
+        + p.gh1 * C.ainf(v0)
+        + C.na_open(C.minf(v0), C.hinf(v0), p.gNa1)
+    )
+    assert chords == pytest.approx(p.gTot1, rel=1e-12)
 
 
 @pytest.mark.parametrize("v0", [-68.0, -58.0])
@@ -388,3 +403,12 @@ def test_goldwyn_preset_has_no_kht_as_in_their_model():
     kw = {k: v for k, v in two.GOLDWYN_2019.items() if k != "v0"}
     p = two.get_params(two.GOLDWYN_2019["v0"], 3, 1, "active-full", **kw)
     assert p.gKHT == 0.0 and p.IKHT0 == 0.0
+
+
+def test_fractions_that_leave_no_room_for_kht_are_refused():
+    with pytest.raises(ValueError, match="negative leak"):
+        two.get_params(-68.0, 3, 1, "active-full", klt1=0.9, h1=0.1, na1=0.0)
+    p = two.get_params(
+        -68.0, 3, 1, "active-full", klt1=0.9, h1=0.1, na1=0.0, gKHT=0.0
+    )
+    assert p.glk1 == pytest.approx(0.0, abs=1e-9)

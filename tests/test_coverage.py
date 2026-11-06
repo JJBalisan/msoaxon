@@ -158,7 +158,7 @@ def test_spiking_rejects_unknown_model_names(model):
 # EPSGpair thresholds on the grid of the repo's EPSGpair_Thresholds_CPT*.jpg
 # (making_threshold_graphs.py --only EPSGpair --jpg-grid), delays 0-0.6 ms.
 # The halving search only returns multiples of Q, so its output is pinned
-# exactly: the closest true threshold to any probe is 8.5e-4 relative away,
+# exactly: the closest true threshold to any probe is of order 1e-4 away,
 # against ~1e-14 drift across platforms and modes. The jpg column is the
 # MATLAB value read off the plot, kept as history; 20 of 28 match and the
 # other 8 are one output (2Q) away (PYTHON.md, "Validation").
@@ -172,7 +172,7 @@ JPG_GRID = [
     (3, "multi", 0.5, 81, 81, True),
     (3, "multi", 0.6, 81, 83, False),  # the plateau, 94.9 vs 97.3
     (3, "two", 0.0, 41, 41, True),
-    (3, "two", 0.1, 43, 41, False),
+    (3, "two", 0.1, 41, 41, True),
     (3, "two", 0.2, 47, 45, False),
     (3, "two", 0.3, 55, 55, True),
     (3, "two", 0.4, 75, 73, False),
@@ -187,10 +187,10 @@ JPG_GRID = [
     (5, "multi", 0.6, 77, 77, True),
     (5, "two", 0.0, 37, 37, True),
     (5, "two", 0.1, 39, 39, True),
-    (5, "two", 0.2, 41, 43, False),  # one step low at three delays
+    (5, "two", 0.2, 41, 43, False),  # one step low at four delays
     (5, "two", 0.3, 49, 51, False),
     (5, "two", 0.4, 67, 69, False),
-    (5, "two", 0.5, 75, 75, True),
+    (5, "two", 0.5, 73, 75, False),
     (5, "two", 0.6, 75, 75, True),
 ]
 

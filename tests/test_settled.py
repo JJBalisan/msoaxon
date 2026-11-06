@@ -153,7 +153,7 @@ TWO_STIMULI = [s for s in STIMULI if s[0] != "EPSGbilateral"]
 def test_two_dv_is_the_voltage_block_of_rhs_bit_for_bit(
     node, input_node, model_type, goldwyn
 ):
-    kw = {"r1": 8.5, "tau_est": 0.34} if goldwyn else {}
+    kw = {"r1": 8.5, "tau_est": 0.34, "gKHT": 0.0} if goldwyn else {}
     v0 = two.GOLDWYN_2019["v0"] if goldwyn else -68.0
     P = two.get_params(v0, node, input_node, model_type, **kw)
     rng = np.random.default_rng(node * 10 + input_node)
