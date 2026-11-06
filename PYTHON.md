@@ -1082,14 +1082,15 @@ geometry a knob. `with_axon()` takes `internode_length` (100 µm), `diameter`
 `ais_start` (0), `myelin_cap` (0.01 µF/cm²), `internode_scale` and `node_scale`
 (a scalar or one multiplier per internode/node pair, for distal shortening) and
 `hold_ld` (True multiplies the internode length by `diameter / 0.66`, so L/d
-stays at the default 100 / 0.66; False leaves it free). At the defaults it
+stays at `internode_length / 0.66`, 100 / 0.66 at the default length; False
+leaves it free). At the defaults it
 returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
 
 Choices to know: channel densities are per µm², so a longer node holds more
 channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
 (scaled with `diameter / 0.66`), so its frustum area is not exact for any
-diameter; `ais_start > 0` appends a passive hillock as compartment 46 (soma
-leak and the AIS's KLT and h densities, no Na or KHT), a modelling choice
+diameter; `ais_start > 0` appends a hillock as compartment 46 (the AIS's
+leak, KLT and h densities, no Na or KHT), a modelling choice
 rather than a measured one. Axial resistivity stays 100 Ω·cm.
 
 ## Dendrites
