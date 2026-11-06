@@ -17,7 +17,8 @@ uv.lock) differed in 8 of 48 cases (multi/Synaptic, multi/SynapticPair,
 multi/ramp2, multi/type/active-sodium, two/EPSG-subthreshold, two/node-5,
 two/step-input-node-3, two/type/Active-sodium; the last three on one Python
 version only), with at most 3 of 8 samples off, absolute differences up to
-0.00048 mV and relative differences from 1.1e-9 up to 7.1e-6. assert_allclose
+0.00048 mV and relative differences from 1.1e-9 up to 7.1e-6 (measured before
+two_cpt's move to rtol 1e-8, #108). assert_allclose
 passes when |got - want| <= atol + rtol * |want|, which near -70 mV is about
 0.012 mV: some 25 times the largest absolute and 14 times the largest relative
 difference seen. A real change still fails it: scaling one channel density by

@@ -177,7 +177,7 @@ Remme & Rinzel 2019. State: 11 = [V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2].
 Currents are in pA. Every Na, KLT and h current has its value at rest
 subtracted, so the model has no rest drift; z is held at z∞(v0) and τz is
 unused; every gate starts at its exact steady state at v0. Integration: scipy
-BDF, RTOL = ATOL = 1e-6, max step 0.1 ms. Input: the soma if `input_node` is 1,
+BDF, RTOL = ATOL = 1e-8, max step 0.1 ms. Input: the soma if `input_node` is 1,
 else the axon compartment.
 
 The values below are `two.get_params(-68.0, node, 1, "active-full")`, which
@@ -297,9 +297,7 @@ passes `mode` on, so it also works in `model_kw`
 (`coincidence.threshold("multi", 0.1, model_kw={"mode": "exact"})`) and
 `measure.passive_step(..., mode=...)`. `two_cpt(..., mode=...)` takes the same
 modes (#108): `two._rhs` is ported too (`rust/src/two.rs`), and the table below
-holds for it with `two._rhs` in place of `multi._rhs`, except the default: with
-no `mode` and no `MSOAXON_MODE`, `two_cpt` runs `"exact"` (see "The
-two-compartment model" under "Native mode" for why).
+holds for it with `two._rhs` in place of `multi._rhs`.
 
 | `mode` | Right-hand side |
 |---|---|
@@ -438,36 +436,33 @@ Jacobian pattern above is unchanged.
 have an analytic Jacobian on a fixed pattern (`two::jac_sparsity`; both
 voltages couple, since an input into the axon is driven by the soma voltage)
 and the Newton matrix goes to faer's sparse LU, the tree solver's shape being
-the 45-compartment model's. `two_cpt` integrates at `TwoCpt.m`'s
-`RTOL = ATOL = 1e-6`, not 1e-8, so native and exact agree less closely than for
-the 45-compartment model: every two-compartment golden trace passes in fast and
-native, but at 151 interpolated samples several runs (`tests/test_fast.py`,
-`TWO_DRIFT`) sit on rtol 1e-4 / atol 5e-3 mV at one point on an upstroke, and
-which ones cross it depends on the platform (the sine at the soma is 1.24× over,
-0.0134 mV; a synaptic input is 0.99 of it on darwin-arm64, 1.09 on Linux x86-64).
-All of them are within it at 1e-8, which a strict test holds. A spike stop lands
-1.15e-6 ms from scipy's. Against an exact run at rtol 1e-10 both modes are off by
-the same order at their own steps (exact 0.0087 to 0.0284 mV, native 0.0083 to
-0.0212), and at 1e-8 the four runs are within tolerance. Run as the default,
-native also moves three pinned results outside their tests' tolerances (the
-Goldwyn passive `tau`, 0.3341 against 0.34 +/- 0.005; a sine `BinarySearch.m`
-point, 11559.4 against 11566.8 +/- 2.3 pA; a passive-step peak, 4.8793 against
-4.8728 at rtol 1e-3), so `two_cpt`'s default stays `"exact"` until that is
-decided.
+the 45-compartment model's. `two_cpt` used to integrate at `TwoCpt.m`'s
+`RTOL = ATOL = 1e-6`, where native and exact differed by about the golden
+tolerance (rtol 1e-4 / atol 5e-3 mV) at one point on an upstroke, and which runs
+crossed it depended on the platform: a synaptic input was at 0.99 of it on
+darwin-arm64 and 1.09 on Linux x86-64. At 1e-8, as for the 45-compartment model,
+every run in `tests/test_fast.py` is at 0.59 of it or under on darwin-arm64, and
+native is the default, also as for that model.
+
+The numbers published here are exact mode's. Native agrees with them at the
+printed precision except for Goldwyn's 3% window (exact 167.4 µs, native 167.2,
+and 167.2 at rtol 1e-10), a sine `BinarySearch.m` point two search steps apart
+(exact 11559.4 pA, native 11563.1) and the passive-step peak (4.867 and 4.869
+MΩ). The tighter tolerance also corrected the passive-step `tau`, 0.1137 ms at
+1e-6 and 0.1197 at 1e-8 and 1e-10 in both modes.
 
 Speed of the 20 searches of `scripts/benchmark_search.py` (one pass at rel_tol
-1e-4, the reference not recomputed; Apple M1 Max, Python 3.13; two repeats
-agreed to 0.1 s):
+1e-4, the reference not recomputed; Apple M1 Max, Python 3.13, with other work
+running at a load average of 20 to 46, so compare within the table):
 
-| | 2-CPT runs (127) | 45-CPT runs (173) | all searches |
+| | 2-CPT runs (128) | 45-CPT runs (173) | all searches |
 |---|---|---|---|
-| default (45-CPT native, 2-CPT exact) | 2.68 s | 1.09 s | 3.78 s |
-| `MSOAXON_MODE=native` | 0.05 s | 1.08 s | 1.13 s |
-| `MSOAXON_MODE=fast` | 1.73 s | 11.94 s | 13.67 s |
-| `MSOAXON_MODE=exact` | 2.62 s | 29.17 s | 31.79 s |
+| default, or `MSOAXON_MODE=native` | 0.09 s | 1.38 s | 1.47 s |
+| `MSOAXON_MODE=fast` | 3.57 s | 15.67 s | 19.24 s |
+| `MSOAXON_MODE=exact` | 5.80 s | 40.29 s | 46.09 s |
 
-With the 45-compartment model native, the two-compartment runs were 71% of
-the search time; native takes them from 2.68 s to 0.05 s.
+Native takes the two-compartment runs from 5.80 s to 0.09 s. `--check` finds no
+search decision that the settled stop changes.
 
 ## Port contract
 
@@ -536,7 +531,7 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
   two-compartment sits one step low at four consecutive delays, and the node-3
   multi-compartment plateau is 94.9 vs 97.3. `tests/test_coverage.py` pins all
   28 Python values, with the jpg values alongside.
-  - Tightening the tolerances 1000× (1e-9, `max_step` 0.02) doesn't move any
+  - Tightening the 2-CPT tolerances 10× (1e-9, `max_step` 0.02) doesn't move any
     Python value, so the Python side is converged. The gap is either ode15s
     error in the original runs or a code change after the jpgs were made (they
     came from an older 11-point `BinarySearch.m`). Telling those apart needs
@@ -552,7 +547,8 @@ Where the port departs from the MATLAB, and why. Now that the Python is the
 reference these are history; they are not reverted.
 
 - **Solver:** `ode15s` → scipy `solve_ivp(method="BDF")` with the same
-  tolerances (2-CPT 1e-6, `max_step` 0.1; 45-CPT 1e-8, `max_step` 0.1·tEnd,
+  tolerances, except that the 2-CPT model's 1e-6 became 1e-8 in #108 (2-CPT
+  1e-8, `max_step` 0.1; 45-CPT 1e-8, `max_step` 0.1·tEnd,
   ode15s's default). Integration restarts at stimulus on/off times so the solver
   can't step over a narrow EPSG. The 45-CPT model gets a sparse Jacobian
   pattern.
@@ -612,7 +608,14 @@ reference these are history; they are not reverted.
   KLT's and h's are, so the resting conductances still sum to the total and rest
   stays at `v0`. `gKHT=` replaces it, and `GOLDWYN_2019` sets 0, since Goldwyn's
   model has none. Results labelled `TwoCpt.m` in this document and in the scripts
-  mean its calibration (10 MΩ, 0.71 ms, −68 mV) with this KHT.
+  mean its calibration (10 MΩ, 0.71 ms, −68 mV) with this KHT and the solver
+  tolerance below.
+
+- **The 2-CPT solver tolerance:** `TwoCpt.m`'s ode15s has `RTOL = ATOL = 1e-6`;
+  `two.py` uses the 45-compartment model's 1e-8. At 1e-6 native and exact differ
+  by about the golden tolerance, which of them crosses it depends on the
+  platform, and the passive-step `tau` is 5% off (see "The two-compartment model"
+  under "Native mode").
 
 ## Quirks kept on purpose
 
@@ -761,10 +764,10 @@ How the widths are computed:
   there. About 20 simulations per window, within 0.5 µs of the same search at
   1e-7.
 - Both searches predict rather than halve. At the 10 mV criterion the peak of
-  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.6 mV at
+  axon − soma rises smoothly through 10 mV (7.7, 9.7, 10.0, 10.3, 17.7 mV at
   −1%, −0.1%, 0, +0.1%, +1% of threshold), so each run that doesn't spike says
   how close it came. That takes about 10 simulations per threshold on average
-  (125 for the twelve benchmark thresholds, at most 13) instead of 15.
+  (126 for the twelve benchmark thresholds, at most 13) instead of 15.
 - Earlier versions read the crossing off a threshold curve on a 20 µs grid.
   Linear interpolation across a curve that bends upward read 0.1–4 µs low, most
   at the 0.5% margin.
@@ -820,7 +823,7 @@ The criterion is an option (issue #21). `coincidence.threshold`,
 
 `coincidence.spike_height()` measures the height as the largest axon − soma of a
 coincident EPSG pair at 2× the 10 mV threshold, run with no spike stop. That
-costs one threshold search plus one run. The height is flat (within 2.5%) from
+costs one threshold search plus one run. The height is flat (within 5%) from
 1.5× to 3× threshold, so the 10 mV seed doesn't bias it. It is cached per
 configuration: model, node, `v0`, EPSG kinetics, stimulus sites and every model
 keyword. Membranes and morphologies are keyed by their settings, so the
@@ -836,22 +839,23 @@ default):
 | Model | Spike height | 50% | Coincident threshold | 3% window | Rheobase (100 ms step) |
 |---|---|---|---|---|---|
 | 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.1 → 199.7 µs (−0.7%) | 3785 → 3852 pA (+1.8%) |
-| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 198.9 → 197.9 µs (−0.5%) | 3851 → 3881 pA (+0.8%) |
-| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.2 → 166.5 µs (−0.4%) | 2070 → 2072 pA (+0.1%) |
+| 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 199.0 → 197.9 µs (−0.6%) | 3851 → 3881 pA (+0.8%) |
+| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.4 → 167.2 µs (−0.1%) | 2070 → 2072 pA (+0.1%) |
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
-  217.5, 216.6 → 215.5 and 182.1 → 182.0 µs.
-- The 0.5% windows narrow by 0.5–0.9% for the 45-compartment and `TwoCpt.m`
+  217.5, 216.6 → 215.3 and 182.2 → 182.2 µs.
+- The 0.5% windows narrow by 0.5–0.8% for the 45-compartment and `TwoCpt.m`
   models.
-- The windows carry about 1 µs of solver jitter at production tolerance, so the
-  last digit is not a model effect. Goldwyn's moved by that much when `TwoCpt.m`'s
-  KHT was corrected, although its own KHT is negligible before and 0 after: its 3%
-  window is 167.22 µs before and 167.23 µs after at rtol 1e-9.
+- The windows carry about 0.2 µs of solver jitter at production tolerance
+  (1e-8), so the last digit is not a model effect. Goldwyn's 3% window is 167.38
+  µs at 1e-8, 167.21 at 1e-9 and 167.18 at 1e-10 (`TwoCpt.m`'s: 199.05, 199.06,
+  199.06). Its own KHT is negligible before the `TwoCpt.m` KHT correction and 0
+  after: 0.0114 nS or 0 gives 167.21 µs either way at rtol 1e-9.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
   two models' criterion moves onto the steep upstroke, which raises their
   thresholds 1.0–1.8% and narrows their 3% windows by at most 0.75%: about 2 µs on
   200, inside the 0.5% vs 3% margin ambiguity above. Goldwyn still narrows the
-  window by about 17% (−16.8% at 10 mV, −16.6% at 50%).
+  window by 16–17% (−16.8% at 10 mV, −16.3% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
   Goldwyn). The coincident thresholds move more: up to 3%, and Goldwyn's by −13%
   at 25%, where the criterion is below its takeoff.
@@ -875,7 +879,7 @@ Values are for the Python port.
 | Spike initiation site | AIS (compartment 3) for an EPSG pair at 1.25–3× threshold; under sustained input 0–36% of spikes start at node 1 or 2 where 50 or more spikes fired, 8% at 350 Hz and the default `gE` (`initiation.py`, #80) | AIS; 5–60% of spikes start at node 1 or 2 under sustained input (Lehnert 2014) |
 | Input resistance, active, at rest | 2.4 MΩ steady, ~4.7 MΩ peak with the leak rebalanced at −68 mV (`rebalance_rest=True`, as in the dendrites table); 2.5 / 4.8 MΩ for the default membrane, which settles at −68.13 mV where the conductances differ a little (`measure.passive_step`, #68) | 5 MΩ (Lehnert's model); ~7 MΩ measured |
 | Somatic spike, from inflection (100 ms step) | 7.4 / 13.3 / 18.2 mV at 1.5× / 2× / 3× rheobase | 17 ± 2 mV mature, 5–15 mV near threshold, graded |
-| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 354 Hz, Q 2.76) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
+| Subthreshold resonance: peak of the soma impedance, small rectified sine (`resonance.py`, #83) | 363 Hz, Q 2.79 (2-compartment: 355 Hz, Q 2.76) | 242 Hz, Q 1.88 (Mikiel-Hunter et al. 2016, [doi](https://doi.org/10.1371/journal.pcbi.1005166); their model at 35 °C, Q over the input resistance) |
 | Spike resonance: sine frequency with the lowest firing threshold | 428 Hz (2-compartment: 429 Hz) | 285 Hz (same model) |
 | EPSG-train threshold minimum: rate with the lowest threshold | 430 Hz (2-compartment: 420 Hz) | 317 Hz (same model, EPSC train) |
 
@@ -986,10 +990,12 @@ than the spike.
   d²V/dt², which lies on a solver sample, so it depends on where the solver put
   its steps. Rerunning with `max_step` 3, 4, 6 and 7 µs instead of 5 moves the
   dendrotoxin row by 0.00 mV and the multi rows by 0.00 mV; the 2-compartment
-  rows move by up to 0.06 mV (1.5×), 0.11 (2×) and 0.00 mV (3×) (remeasured in
-  exact mode: 6.349–6.410 and 12.855–12.967 mV; the other rows move by under
-  0.0001 mV). `tests/test_somatic.py` gives each table point a tolerance from
-  its spread: 0.06 mV, but 0.12 and 0.08 mV for those two. Before
+  rows moved by up to 0.06 mV (1.5×), 0.11 (2×) and 0.00 mV (3×) at the old
+  rtol 1e-6 (remeasured in exact mode: 6.349–6.410 and 12.855–12.967 mV; the
+  other rows move by under 0.0001 mV) and by 0.00 mV at the 1e-8 `two_cpt` now
+  runs at (6.349, 12.855 and 17.419 mV at every step size).
+  `tests/test_somatic.py` gives each table point a tolerance from the spread it
+  had at 1e-6: 0.06 mV, but 0.12 and 0.08 mV for those two. Before
   issue #56 the pick was the argmax of d²V/dt² of the linearly interpolated
   trace, a comb with a tooth at every solver step. The dendrotoxin row then
   moved 0.6–1.9 mV under the same changes (25.08 mV on macOS against 25.97 mV on
@@ -1047,9 +1053,9 @@ than the spike.
   | 2-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
   | −68, −62.5 | 33% | 3851 pA | 2.42 MΩ | 587 µs | 199 µs | 6.3 / 12.9 / 17.4 mV |
-  | −68, −77 | 76% | 4431 pA | 2.38 MΩ | 577 µs | 190 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
-  | −58, −62.5 | 64% | 1963 pA | 2.34 MΩ | 595 µs | 218 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
-  | −58, −77 | 92% | 2035 pA | 2.32 MΩ | 588 µs | 214 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
+  | −68, −77 | 76% | 4431 pA | 2.38 MΩ | 577 µs | 191 µs | no inflection (peak 23.5 / 29.0 / 37.7) |
+  | −58, −62.5 | 64% | 1963 pA | 2.34 MΩ | 595 µs | 217 µs | no inflection (peak 13.2 / 16.2 / 21.5) |
+  | −58, −77 | 92% | 2035 pA | 2.32 MΩ | 588 µs | 215 µs | no inflection (peak 13.0 / 15.9 / 21.0) |
 
   - **Scott's V½ moves the rheobase and little else:** at −68 mV, −77 raises
     rheobase by 16% (45-compartment) and 15% (2-compartment), and moves Rin,
@@ -1074,7 +1080,7 @@ than the spike.
   - **The models disagree at −58 mV, because they change different things:**
     rheobase rises 39% in the 45-compartment model and falls 49% in the
     2-compartment one; the window narrows from 200 to 137 µs in the first and
-    widens from 199 to 218 µs in the second. `two.get_params` recalibrates every
+    widens from 199 to 217 µs in the second. `two.get_params` recalibrates every
     conductance to the lookup's resting fractions at `v0` (node 3,
     `active-full`, −58 against −68 mV: `gNa1` 154 against 1645 nS, 0.09×;
     `gKLT1` 0.20×; `gh1` 2.33×), so its −58 mV cell is a different cell, with
@@ -1195,7 +1201,7 @@ width against a resonance, a mismatch of measure.
 | 45-compartment, rest rebalanced | 2.4 MΩ | 367 Hz, 2.82 | 439 Hz | 446 Hz |
 | 45-compartment, KLT frozen at its resting conductance (`klt_to_leak="chord"`) | 9.1 MΩ | none (low-pass) | none (rises with frequency) | none (falls to 800 Hz) |
 | 45-compartment, KLT replaced by its slope conductance (`klt_to_leak="slope"`) | 2.6 MΩ | none (Q 1.00) | none (2% dip at 154 Hz) | none (flat) |
-| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 354 Hz, 2.76 | 429 Hz | 420 Hz |
+| 2-compartment (`TwoCpt.m`) | 2.4 MΩ | 355 Hz, 2.76 | 429 Hz | 420 Hz |
 
 What it shows:
 
@@ -1238,7 +1244,7 @@ What it shows:
   train needs the single-event threshold, so the membrane does not sum EPSGs at
   rates that do not match its ring.
 - **Train length:** from 50 to 500 ms (the paper's) the 45-compartment thresholds
-  fall 2–6% (the 2-compartment ones do not move) and its minima move from 428 to
+  fall 2–6% (the 2-compartment ones do not move, except the 100 Hz sine, down 5%) and its minima move from 428 to
   424 Hz (sine) and 430 to 424 Hz (EPSG), measured in native mode.
 - **Not done:** the paper's dV/dt criterion, hyperpolarising half-cycle scaling
   (0.5) and 0.3 ms EPSC are not reproduced; the repo's criterion, a rectified

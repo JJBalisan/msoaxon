@@ -8,19 +8,29 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
+`two_cpt` now runs at the 45-compartment model's solver tolerance and, with the
+extension, in native mode, which makes the searches' two-compartment runs about
+60 times faster. Its published numbers move a little and 23 of its golden traces
+with them, by at most 0.027 mV; the 45-compartment model's do not.
+
 ### Added
 
 - `two_cpt(..., mode=...)`: the two-compartment model gets the Rust
   right-hand side (`rust/src/two.rs`, `msoaxon_fast.TwoCptRhs`) and the
   native integrator, with the modes of `mso_axon`; `_dispatch.run_model`
-  passes `mode` to both models. Its default stays `"exact"` (unless
-  `MSOAXON_MODE` says otherwise): native runs move some pinned
-  two-compartment results past their tests' tolerances. Fast runs are
-  bit-identical to `"exact"` on darwin-arm64; the mode is part of
-  `two_cpt`'s quiet-prefix key (#108).
+  passes `mode` to both models. Fast runs are bit-identical to `"exact"` on
+  darwin-arm64; the mode is part of `two_cpt`'s quiet-prefix key (#108).
 
 ### Changed
 
+- `two.RTOL` and `two.ATOL` are 1e-8, not `TwoCpt.m`'s 1e-6: at 1e-6 native and
+  exact differ by about the golden tolerance, and which runs cross it depends on
+  the platform. In exact mode the passive-step `tau` goes from 0.1137 to 0.1197
+  ms, its value at 1e-10 too, the 3% window from 198.9 to 199.0 µs, Goldwyn's from
+  167.2 to 167.4 µs and the subthreshold resonance from 354 to 355 Hz; the
+  somatic spike's `max_step` spread of up to 0.11 mV goes to 0 (#108).
+- `two_cpt`'s default mode is `mso_axon`'s: `MSOAXON_MODE` if set, else `"native"`
+  with the extension and `"exact"` without it (#108).
 - `rust/src/integrate.rs` runs over a `Model` trait (`MultiRhs` with the
   tree solver, `TwoCptRhs` with faer's sparse LU) (#108).
 - `tests/test_golden.py` passes `mode` to the two-compartment cases too, so
