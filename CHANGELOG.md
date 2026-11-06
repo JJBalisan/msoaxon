@@ -6,6 +6,19 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+### Added
+
+- `multi.with_axon(...)`, a `Morphology` builder for the axon geometry that
+  `constants.py` folds into `SA`, `cap` and `g_ax`: internode length,
+  diameter, node length, AIS length and start, myelin capacitance, per-pair
+  `internode_scale` and `node_scale` vectors for distal shortening, and
+  `hold_ld` to hold or free L/d. At the defaults every array is bit-identical
+  to `LUMPED`'s (pinned in `tests/test_axon_geometry.py`), so no number and
+  no golden trace moves. Python only; Rust still takes the arrays. The
+  sweeps in #81 stay open.
+
 ## 1.10.0 (2 Nov 2026)
 
 The figures are redrawn to one style (#137): paper-width PNG plus PDF,

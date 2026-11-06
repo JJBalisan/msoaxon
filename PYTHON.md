@@ -1074,6 +1074,24 @@ compartment's KLT conductance at rest added to its leak), and for the
 two-compartment model with KLT present and with the same substitution
 (`two_cpt(klt_to_leak="chord")`).
 
+## Axon geometry
+
+`mso_axon(..., mem=membrane(..., morph=with_axon(...)))` makes the axon's
+geometry a knob. `with_axon()` takes `internode_length` (100 µm), `diameter`
+(0.66 µm), `node_length` (1 µm), `ais_length` (20 µm, two equal compartments),
+`ais_start` (0), `myelin_cap` (0.01 µF/cm²), `internode_scale` and `node_scale`
+(a scalar or one multiplier per internode/node pair, for distal shortening) and
+`hold_ld` (True multiplies the internode length by `diameter / 0.66`, so L/d
+stays at the default 100 / 0.66; False leaves it free). At the defaults it
+returns arrays bit-identical to `LUMPED`'s, so nothing published moves.
+
+Choices to know: channel densities are per µm², so a longer node holds more
+channels; the first AIS compartment keeps Constants.m's `1.66/3` slant term
+(scaled with `diameter / 0.66`), so its frustum area is not exact for any
+diameter; `ais_start > 0` appends a passive hillock as compartment 46 (soma
+leak and the AIS's KLT and h densities, no Na or KHT), a modelling choice
+rather than a measured one. Axial resistivity stays 100 Ω·cm.
+
 ## Dendrites
 
 `mso_axon(..., morph=with_dendrites())` adds two dendrites, following the

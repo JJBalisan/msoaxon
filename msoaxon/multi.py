@@ -414,6 +414,191 @@ def with_dendrites(
     )  # 1-indexed compartment numbers
 
 
+# The geometry that C.SA, C.L and CAP fold in; with_axon() defaults.
+_INTERNODE_LEN = 100.0  # [um]
+_NODE_LEN = 1.0  # [um]
+_AXON_DIAM = 0.66  # internode, node and distal AIS diameter [um]
+_AIS_LEN = 20.0  # both AIS compartments together [um]
+_AIS_BASE_DIAM = 1.64  # proximal AIS diameter [um]
+_AIS_TAPER = 1.66 / 3  # Constants.m's term, see with_axon
+_MYELIN_CM = 0.01  # myelin capacitance [uF/cm^2]
+_SOMA_CM = 0.8  # soma, AIS and node capacitance [uF/cm^2]
+N_PAIRS = 21  # internode + node pairs
+
+
+def _pairs(name: str, scale: np.ndarray | float | None) -> np.ndarray:
+    """Returns a per-pair multiplier: ones by default, else validated."""
+    if scale is None:
+        return np.ones(N_PAIRS)
+    out = np.broadcast_to(np.asarray(scale, dtype=float), (N_PAIRS,)).copy()
+    if not np.all(out > 0):
+        raise ValueError(f"{name} must be > 0, got {scale!r}")
+    return out
+
+
+def with_axon(  # noqa: PLR0913
+    internode_length: float = _INTERNODE_LEN,
+    diameter: float = _AXON_DIAM,
+    node_length: float = _NODE_LEN,
+    ais_length: float = _AIS_LEN,
+    ais_start: float = 0.0,
+    myelin_cap: float = _MYELIN_CM,
+    internode_scale: np.ndarray | float | None = None,
+    node_scale: np.ndarray | float | None = None,
+    hold_ld: bool = False,
+) -> Morphology:
+    """Builds the 45-compartment chain with the axon geometry as knobs.
+
+    At the defaults the arrays are bit-identical to LUMPED's (a test
+    pins it), so the golden traces hold. Compartments keep their
+    meaning: 1 soma, 2-3 AIS, then 21 internode/node pairs.
+
+    The AIS keeps msoAxon.m's two equal compartments, so ais_length is
+    split in half. Its first compartment tapers from the proximal
+    diameter to `diameter`; the slant term keeps Constants.m's 1.66/3
+    (likely meant 0.66/2, so the frustum is not exact) and scales it
+    with `diameter / 0.66`, which leaves the default bits alone and
+    changes smoothly. Channel densities, leak and the soma are as in
+    LUMPED; node and internode densities are per um^2, so a longer node
+    holds more channels. Axial resistivity stays 100 Ohm cm.
+
+    ais_start > 0 appends one passive hillock compartment (cylinder of
+    the proximal AIS diameter, `ais_start` um long, soma leak and KLT
+    densities of the AIS, no Na or KHT) as compartment 46, wired
+    soma -> hillock -> AIS, so compartments 1-45 keep their meaning as
+    with with_dendrites(). That is a modelling choice, not a measured
+    one.
+
+    Args:
+        internode_length: Internode length [um].
+        diameter: Internode, node and distal AIS diameter [um].
+        node_length: Node length [um].
+        ais_length: AIS length, both compartments together [um].
+        ais_start: Distance from the soma to the AIS [um]; 0 attaches
+            it to the soma.
+        myelin_cap: Internode capacitance [uF/cm^2].
+        internode_scale: Multiplier on internode_length, a scalar or
+            one per pair (21): distal shortening is a vector falling
+            with the index.
+        node_scale: As internode_scale, for node_length.
+        hold_ld: True multiplies internode_length by diameter / 0.66,
+            so L/d stays at the default 100 / 0.66 whatever the
+            diameter; False (default) leaves the length free.
+
+    Returns:
+        A Morphology; chain is True unless ais_start > 0.
+
+    Raises:
+        ValueError: If a length, diameter or scale is not > 0, or
+            ais_start or myelin_cap is negative.
+    """
+    for name, value in (
+        ("internode_length", internode_length),
+        ("diameter", diameter),
+        ("node_length", node_length),
+        ("ais_length", ais_length),
+    ):
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0, got {value!r}")
+    for name, value in (("ais_start", ais_start), ("myelin_cap", myelin_cap)):
+        if not value >= 0:
+            raise ValueError(f"{name} must be >= 0, got {value!r}")
+    inter_scale = _pairs("internode_scale", internode_scale)
+    nd_scale = _pairs("node_scale", node_scale)
+    ratio = diameter / _AXON_DIAM  # exactly 1.0 at the default
+    inter = internode_length * ratio if hold_ld else internode_length
+    l_inter = inter * inter_scale
+    l_node = node_length * nd_scale
+    seg = ais_length / 2
+
+    ais1 = (
+        np.pi
+        * (_AIS_BASE_DIAM / 2 + diameter / 2)
+        * np.sqrt((_AIS_BASE_DIAM / 2 - _AIS_TAPER * ratio) ** 2 + seg**2)
+    )
+    sa_pair = np.stack([np.pi * l_inter * diameter, np.pi * l_node * diameter])
+    sa = np.concatenate(
+        [[C.SA[0], ais1, np.pi * seg * diameter], sa_pair.T.ravel()]
+    )
+    length = np.concatenate(
+        [[C.L[0], seg, seg], np.stack([l_inter, l_node]).T.ravel()]
+    )
+    cap = (
+        np.concatenate(
+            [
+                [_SOMA_CM] * 3,
+                np.stack(
+                    [np.full(N_PAIRS, myelin_cap), np.full(N_PAIRS, _SOMA_CM)]
+                ).T.ravel(),
+            ]
+        )
+        * 1e6
+        * 1e-8
+    )
+    g_na, g_kht, g_klt, g_h, g_lk = (
+        C.G_NA,
+        C.G_KHT,
+        C.G_KLT,
+        C.G_H,
+        C.G_LK,
+    )
+    parent, child = _PARENT, _CHILD
+    labels = LUMPED.labels
+    n = N
+    if ais_start > 0:
+        hill_sa = np.pi * _AIS_BASE_DIAM * ais_start
+        sa = np.append(sa, hill_sa)
+        length = np.append(length, ais_start)
+        cap = np.append(cap, _SOMA_CM * 1e6 * 1e-8)
+        g_na = np.append(g_na, 0.0)
+        g_kht = np.append(g_kht, 0.0)
+        g_klt = np.append(g_klt, C.G_KLT[1])
+        g_h = np.append(g_h, C.G_H[1])
+        g_lk = np.append(g_lk, C.G_LK[1])
+        parent = np.concatenate([[0, N], np.arange(1, N - 1)])
+        child = np.concatenate([[N, 1], np.arange(2, N)])
+        labels = [*labels, "hillock"]
+        n = N + 1
+    l_cm = length * 1e-4
+    xa_cm = np.pi * (sa / (2 * np.pi * length)) ** 2 * 1e-8
+    if ais_start > 0:
+        g_ax = (2 / R_AXIAL) / (
+            l_cm[parent] / xa_cm[parent] + l_cm[child] / xa_cm[child]
+        )
+    else:
+        g_ax = (2 / R_AXIAL) / (l_cm[:-1] / xa_cm[:-1] + l_cm[1:] / xa_cm[1:])
+    return Morphology(
+        key=(
+            "axon",
+            float(internode_length),
+            float(diameter),
+            float(node_length),
+            float(ais_length),
+            float(ais_start),
+            float(myelin_cap),
+            tuple(inter_scale.tolist()),
+            tuple(nd_scale.tolist()),
+            bool(hold_ld),
+        ),
+        n=n,
+        sa=sa,
+        cap=cap,
+        g_na=g_na,
+        g_kht=g_kht,
+        g_klt=g_klt,
+        g_h=g_h,
+        g_lk=g_lk,
+        parent=parent,
+        child=child,
+        g_ax=g_ax,
+        chain=ais_start <= 0,
+        jac=LUMPED.jac
+        if ais_start <= 0
+        else _tree_jac_sparsity(n, parent, child),
+        labels=labels,
+    )
+
+
 def axial_current(V: np.ndarray, morph: Morphology = LUMPED) -> np.ndarray:
     """Returns the axial current density, sign convention as in msoAxon.m.
 
