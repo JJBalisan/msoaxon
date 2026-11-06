@@ -1,10 +1,12 @@
 """multi.with_axon: the axon geometry as knobs (#81)."""
 
+import warnings
+
 import numpy as np
 import pytest
 
 import msoaxon
-from msoaxon import multi
+from msoaxon import _dispatch, multi
 
 ARRAYS = (
     "sa",
@@ -278,3 +280,14 @@ def test_fast_mode_matches_exact_on_a_hillock_chain():
     np.testing.assert_allclose(
         np.interp(t0, t1, y1[:, 10]), y0[:, 10], rtol=1e-2, atol=0.5
     )
+
+
+def test_the_default_site_on_a_hillock_chain_warns():
+    m = multi.with_axon(ais_start=4.0)
+    args = ("step", 2, 4, 0.0)
+    with pytest.warns(UserWarning, match="proximal AIS"):
+        _dispatch.run_model("multi", *args, 3, 3, -68.0, 1, morph=m)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _dispatch.run_model("multi", *args, 4, 3, -68.0, 1, morph=m)
+        _dispatch.run_model("multi", *args, 3, 3, -68.0, 1)

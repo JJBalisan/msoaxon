@@ -1093,7 +1093,14 @@ diameter; `ais_start > 0` inserts a hillock between the soma and the AIS (the
 AIS's leak, KLT and h densities, no Na or KHT), a modelling choice rather than a
 measured one. The numbering stays physical: the hillock is compartment 2, the
 AIS 3-4 and the last node 46, so a site keeps its label but its number moves up
-by one against `ais_start=0`. Axial resistivity stays 100 Ω·cm.
+by one against `ais_start=0`. The analyses' default `node=3` is the distal AIS at
+`ais_start=0` and the proximal AIS beyond it, which changes threshold by 11% and
+spike height by 58%, so they warn: compare `node=4` there, and go by
+`Morphology.labels` across a sweep. `spiking()` and the plots still read the
+45-compartment layout, so they are not valid on a hillock chain. Longer axons
+also take the spike-site search past `initiation.py`'s `LEAD`, tuned to the
+default 0.35-0.4 ms conduction: raise `lead` with the conduction time. Axial
+resistivity stays 100 Ω·cm.
 
 ## Dendrites
 
