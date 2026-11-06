@@ -6,13 +6,14 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
-## Unreleased
+## 1.11.0 (6 Nov 2026)
 
 The two-compartment model's KHT is corrected, so its published numbers move a
 little and 17 of its golden traces with them; the 45-compartment model's do not.
 `membrane()` also gets the knobs for the cell-to-cell diversity the papers name
 (#82) and `multi.with_axon` the axon geometry (#81); their defaults are today's
-literals, so those two move nothing.
+literals, so those two move nothing. `PYTHON.md` gains model-description tables
+and one agreement contract (#86).
 
 ### Fixed
 
@@ -34,8 +35,10 @@ literals, so those two move nothing.
   `internode_scale` and `node_scale` vectors for distal shortening, and
   `hold_ld` to hold or free L/d. At the defaults every array is bit-identical
   to `LUMPED`'s (pinned in `tests/test_axon_geometry.py`), so no number and
-  no golden trace moves. Python only; Rust still takes the arrays. The
-  sweeps in #81 stay open.
+  no golden trace moves. `ais_start > 0` inserts a hillock and the numbering
+  stays physical, so every later compartment moves up by one and the analyses
+  warn that their default `node=3` is then the proximal AIS. Python only; Rust
+  still takes the arrays. The sweeps in #81 stay open.
 - `membrane(ih_density_scale=, ih_vhalf=, ih_tau_scale=)` for the h current's
   density, half-activation and time constant, `na_act_vhalf=` and
   `na_act_slope=` for the Na activation curve, `dendrite_kht_scale=` for KHT
@@ -48,8 +51,8 @@ literals, so those two move nothing.
   No MSO Q10 has been measured: the defaults 3 and 2 are Rothman & Manis 2003's.
 - `constants.minf`, `ainf` and the six `tau*` functions take the midpoint,
   slope or rate factor as optional arguments.
-- `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0: the
-  parts of their paper read for this describe Na and KLT only.
+- `two_cpt` and `two.get_params` take `gKHT=`. `GOLDWYN_2019` sets it to 0, since
+  Goldwyn's model has none.
 - `PYTHON.md` has a model description per model (45-compartment,
   two-compartment, dendritic variant): the shared gates and currents, then
   every parameter with its value, units and source, read from the code, in
