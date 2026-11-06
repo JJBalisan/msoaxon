@@ -17,13 +17,13 @@ the golden traces are bit-identical.
 - `membrane(ih_density_scale=, ih_vhalf=, ih_tau_scale=)` for the h current's
   density, half-activation and time constant, `na_act_vhalf=` and
   `na_act_slope=` for the Na activation curve, `dendrite_kht_scale=` for KHT
-  in the dendrites (a multiple of the somatic density; the default 0 keeps
-  them without), and `temperature=` with `q10=`: a Q10 factor on every gate's
-  time constant, relative to the model's 35 C. Fast and native modes honour
-  all of them through the gating constants they already take (`rust/` is
-  unchanged). `Membrane.key` and `describe()` carry the knobs. No MSO Q10
-  has been measured: the default `q10=3` is the assumption `constants.py`
-  already made.
+  in the dendrites (a multiple of the somatic density, the same along them as
+  in Nabel et al. 2019; the default 0 keeps them without), and `temperature=`
+  with `q10=` and `q10_conductance=`: Q10 factors on every gate's time constant
+  and every voltage-gated density, relative to the model's 35 C. Fast and native
+  modes honour all of them through the gating constants and arrays they already
+  take (`rust/` is unchanged). `Membrane.key` and `describe()` carry the knobs.
+  No MSO Q10 has been measured: the defaults 3 and 2 are Rothman & Manis 2003's.
 - `constants.minf`, `ainf` and the six `tau*` functions take the midpoint,
   slope or rate factor as optional arguments.
 

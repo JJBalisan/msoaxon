@@ -708,13 +708,13 @@ def _check_channel_knobs(knobs: dict[str, float], morph: Morphology) -> None:
     Raises:
         ValueError: As membrane() documents.
     """
-    if knobs["dendrite_kht_scale"] != 0.0 and morph.n == N:
+    if knobs["dendrite_kht_scale"] != 0.0 and morph.lateral is None:
         raise ValueError(
             "dendrite_kht_scale needs a morphology with dendrites "
             "(morph=with_dendrites())"
         )
     nonneg = ("ih_density_scale", "dendrite_kht_scale")
-    positive = ("ih_tau_scale", "na_act_slope", "q10")
+    positive = ("ih_tau_scale", "na_act_slope", "q10", "q10_conductance")
     for name, value in knobs.items():
         if not math.isfinite(value):
             raise ValueError(f"{name} must be finite, got {value}")
@@ -725,7 +725,10 @@ def _check_channel_knobs(knobs: dict[str, float], morph: Morphology) -> None:
 
 
 def _scale_channels(
-    morph: Morphology, ih_density_scale: float, dendrite_kht_scale: float
+    morph: Morphology,
+    ih_density_scale: float,
+    dendrite_kht_scale: float,
+    conductance: float = 1.0,
 ) -> Morphology:
     """Returns morph with gh scaled and the dendrites given KHT.
 
@@ -739,11 +742,17 @@ def _scale_channels(
         ih_density_scale: Multiplies gh everywhere.
         dendrite_kht_scale: The dendrites' gKHT as a multiple of the
             soma's.
+        conductance: Multiplies every voltage-gated density (the Q10
+            factor of membrane()'s temperature); the leak keeps its own.
 
     Returns:
         morph, or the copy.
     """
-    if ih_density_scale == 1.0 and dendrite_kht_scale == 0.0:
+    if (
+        ih_density_scale == 1.0
+        and dendrite_kht_scale == 0.0
+        and conductance == 1.0
+    ):
         return morph
     g_h, g_kht = morph.g_h * ih_density_scale, morph.g_kht.copy()
     if dendrite_kht_scale != 0.0:  # else keep any KHT morph already has
@@ -755,9 +764,12 @@ def _scale_channels(
             morph.key,
             float(ih_density_scale),
             float(dendrite_kht_scale),
+            float(conductance),
         ),
-        g_h=g_h,
-        g_kht=g_kht,
+        g_na=morph.g_na * conductance,
+        g_klt=morph.g_klt * conductance,
+        g_h=g_h * conductance,
+        g_kht=g_kht * conductance,
     )
 
 
@@ -779,6 +791,7 @@ def membrane(
     dendrite_kht_scale: float = 0.0,
     temperature: float = 35.0,
     q10: float = 3.0,
+    q10_conductance: float = 2.0,
 ) -> Membrane:
     """Builds per-compartment channel overrides for the multi model.
 
@@ -856,21 +869,29 @@ def membrane(
         na_act_slope: The Na activation slope factor k [mV], positive
             (default: 11).
         dendrite_kht_scale: gKHT in the dendrite compartments
-            (with_dendrites only), as a multiple of the somatic gKHT
-            (0.1 nS/um^2). The default 0 is msoAxon.m's: no KHT in the
-            dendrites, so a multiple of the dendrite's own (zero)
-            density would be zero. Nabel et al 2019 (Front Cell
-            Neurosci 13:38) found KHT in distal dendrites, active near
-            rest.
+            (with_dendrites only), the same along them, as a multiple of
+            the somatic gKHT (0.1 nS/um^2). The default 0 is msoAxon.m's
+            and Lehnert et al 2014's: KHT at the soma only. Nabel et al
+            2019 (Front Cell Neurosci 13:38) found high-voltage-activated
+            K channels more evenly spread than KLT, with clear expression
+            at distal dendrites, and modelled KHT with equal conductance
+            in every compartment: 0.5449 mS/cm^2 alongside KLT, which is
+            0.00545 nS/um^2, a scale of about 0.054. The gate here stays
+            C.pinf (Rothman & Manis), closed near rest; Nabel's own gate
+            activates near rest and is not modelled.
         temperature: The temperature [C]. Every gate's time constant is
             divided by q10 ** ((temperature - 35) / 10), on top of the
-            Q10 factors constants.py already holds for taup and taua
-            (the model is msoAxon.m's, at 35 C, so 35 changes nothing,
-            bit for bit). Conductances do not take a Q10, nor do the
-            synaptic kinetics. No MSO Q10 has been measured, so q10 is
-            an assumption, not data.
+            Q10 factors constants.py already holds for taup and taua,
+            and every voltage-gated density is multiplied by
+            q10_conductance ** ((temperature - 35) / 10). The model is
+            msoAxon.m's, at 35 C, so 35 changes nothing, bit for bit.
+            The leak and the synaptic kinetics take no Q10.
         q10: The Q10 of every rate (default 3, the value constants.py
-            already uses).
+            already uses; Rothman & Manis 2003's). No MSO Q10 has been
+            measured, so it is an assumption, not data.
+        q10_conductance: The Q10 of the voltage-gated densities (default
+            2, Rothman & Manis 2003's suggestion for scaling their
+            conductances; also an assumption).
 
     Returns:
         A Membrane with key, morph_key, morph, g_na, g_klt, na_vhalf,
@@ -919,13 +940,28 @@ def membrane(
             "ih_tau_scale": ih_tau_scale,
             "na_act_slope": na_act_slope,
             "q10": q10,
+            "q10_conductance": q10_conductance,
             "ih_vhalf": ih_vhalf,
             "na_act_vhalf": na_act_vhalf,
             "temperature": temperature,
         },
         morph,
     )
-    morph = _scale_channels(morph, ih_density_scale, dendrite_kht_scale)
+    try:
+        conductance = float(q10_conductance) ** (
+            (float(temperature) - 35.0) / 10
+        )
+    except OverflowError:
+        conductance = math.inf
+    if not (math.isfinite(conductance) and conductance > 0):
+        raise ValueError(
+            f"temperature {temperature} with q10_conductance "
+            f"{q10_conductance} gives a factor {conductance} that is not "
+            "finite and positive"
+        )
+    morph = _scale_channels(
+        morph, ih_density_scale, dendrite_kht_scale, conductance
+    )
     na_act = (-float(na_act_vhalf), -float(na_act_slope))
     ih_vh = -float(ih_vhalf)
     try:
@@ -1001,6 +1037,7 @@ def membrane(
             float(dendrite_kht_scale),
             float(temperature),
             float(q10),
+            float(q10_conductance),
         ),
         morph_key=morph.key,
         morph=morph,

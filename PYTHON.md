@@ -850,15 +850,24 @@ than the spike.
   - `na_act_vhalf` (mV, default −46) and `na_act_slope` (mV, default 11): the
     Na activation curve, the same in every compartment; the inactivation
     midpoint stays `soma_na_vhalf`.
-  - `dendrite_kht_scale`: gKHT in the dendrites as a multiple of the soma's
-    0.1 nS/µm² (default 0: the dendrites have no KHT, so a multiple of their
-    own density could not switch it on). `with_dendrites()` morphologies only.
-  - `temperature` (°C, default 35) and `q10` (default 3): every gate's time
-    constant is divided by `q10 ** ((temperature − 35) / 10)`, on top of the
-    Q10 factors `constants.py` already holds for `taup` and `taua`. 35 °C is
-    `msoAxon.m`'s, so it changes no bit whatever the `q10`. Conductances and
-    the synaptic kinetics take no Q10. No MSO Q10 has been measured, so the 3
-    is an assumption, not data.
+  - `dendrite_kht_scale`: gKHT in the dendrites, the same along them, as a
+    multiple of the soma's 0.1 nS/µm² (default 0: KHT at the soma only, as in
+    Lehnert et al. 2014, so a multiple of their own density could not switch
+    it on). `with_dendrites()` morphologies only. Nabel et al. 2019 found
+    high-voltage-activated K channels more evenly spread than KLT, with clear
+    expression at distal dendrites, and modelled KHT with equal conductance in
+    every compartment: 0.5449 mS/cm² alongside KLT, a scale of about 0.054. The
+    gate stays Rothman & Manis's `pinf`, closed near rest; Nabel's own gate
+    activates near rest and is not modelled.
+  - `temperature` (°C, default 35), `q10` (default 3) and `q10_conductance`
+    (default 2): every gate's time constant is divided by
+    `q10 ** ((temperature − 35) / 10)`, on top of the Q10 factors `constants.py`
+    already holds for `taup` and `taua`, and every voltage-gated density is
+    multiplied by `q10_conductance ** ((temperature − 35) / 10)`. These are the
+    two values Rothman & Manis 2003 suggested, as summarised by Manis et al.
+    2019, who add that no data directly support them. 35 °C is `msoAxon.m`'s, so
+    it changes no bit whatever the Q10s. The leak and the synaptic kinetics take
+    no Q10. No MSO Q10 has been measured, so both are assumptions, not data.
 
   The densities live in the morphology (as `klt_to_leak`'s leak does), so a
   `mem` built with `ih_density_scale` or `dendrite_kht_scale` carries its own

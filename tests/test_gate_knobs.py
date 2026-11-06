@@ -6,6 +6,7 @@ knobs, and a whole run against the same run through the unchanged default
 membrane. The golden traces (tests/test_golden.py) pin the rest.
 """
 
+import dataclasses
 import warnings
 
 import numpy as np
@@ -174,7 +175,9 @@ def test_dendrite_kht_changes_the_dendritic_current():
     ],
 )
 def test_temperature_divides_every_time_constant(temperature, q10, rate):
-    mem = multi.membrane(-68.0, temperature=temperature, q10=q10)
+    mem = multi.membrane(
+        -68.0, temperature=temperature, q10=q10, q10_conductance=1.0
+    )
     assert mem.rate == pytest.approx(rate, rel=1e-14)
     x = _gate_state(N)
     d0 = _blocks(_rhs(multi.membrane(-68.0), x), N)
@@ -307,3 +310,38 @@ def test_klt_to_leak_morphology_key_follows_the_rest_knobs(knob, value):
     a = multi.membrane(-60.0, **kw)
     b = multi.membrane(-60.0, **kw, **{knob: value})
     assert a.morph.key != b.morph.key
+
+
+def test_temperature_scales_the_voltage_gated_densities_only():
+    mem = multi.membrane(-68.0, temperature=45.0)
+    L = multi.LUMPED
+    np.testing.assert_array_equal(mem.g_na, L.g_na * 2.0)
+    np.testing.assert_array_equal(mem.g_klt, L.g_klt * 2.0)
+    np.testing.assert_array_equal(mem.morph.g_h, L.g_h * 2.0)
+    np.testing.assert_array_equal(mem.morph.g_kht, L.g_kht * 2.0)
+    np.testing.assert_array_equal(mem.morph.g_lk, L.g_lk)
+    cool = multi.membrane(-68.0, temperature=25.0, q10_conductance=1.5)
+    np.testing.assert_allclose(cool.g_na, L.g_na / 1.5, rtol=1e-15)
+
+
+def test_35_c_ignores_the_conductance_q10():
+    mem = multi.membrane(-68.0, temperature=35.0, q10_conductance=7.5)
+    assert mem.morph is multi.LUMPED
+
+
+def test_conductance_q10_enters_the_keys_and_the_description():
+    a = multi.membrane(-68.0, temperature=30.0)
+    b = multi.membrane(-68.0, temperature=30.0, q10_conductance=1.5)
+    assert a.key != b.key and a.morph_key != b.morph_key
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, np.inf, np.nan])
+def test_bad_conductance_q10_is_refused(value):
+    with pytest.raises(ValueError):
+        multi.membrane(-68.0, q10_conductance=value)
+
+
+def test_dendrite_kht_needs_real_dendrites_not_just_extra_compartments():
+    extra = dataclasses.replace(multi.LUMPED, n=46)
+    with pytest.raises(ValueError, match="dendrite_kht_scale"):
+        multi.membrane(-68.0, morph=extra, dendrite_kht_scale=1.0)

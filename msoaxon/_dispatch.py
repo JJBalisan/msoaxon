@@ -310,6 +310,7 @@ _MEMBRANE_KEY = (
     "dendrite_kht_scale",
     "temperature",
     "q10",
+    "q10_conductance",
 )
 
 

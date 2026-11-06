@@ -163,7 +163,7 @@ def test_membrane_keys():
     m = multi.membrane(-68.0)
     assert m.key == (
         (-68.0, 1.0, 1.0, -62.5, False, 1.0, -68.0)
-        + (1.0, -80.4, 1.0, -46.0, 11.0, 0.0, 35.0, 3.0)
+        + (1.0, -80.4, 1.0, -46.0, 11.0, 0.0, 35.0, 3.0, 2.0)
     )
     assert m.morph_key == "lumped"
     assert m.morph is multi.LUMPED
@@ -180,7 +180,7 @@ def test_membrane_keys():
     )
     assert m.key == (
         (-60.0, 3.0, 2.0, -77.0, True, 0.5, -68.0)
-        + (1.0, -80.4, 1.0, -46.0, 11.0, 0.0, 35.0, 3.0)
+        + (1.0, -80.4, 1.0, -46.0, 11.0, 0.0, 35.0, 3.0, 2.0)
     )
     assert m.morph_key == d.key
     assert m.y0_gates is not None and len(m.y0_gates) == 6
@@ -201,7 +201,7 @@ def test_keys_feed_the_caches():
         "axon_rest=-68.0, ih_density_scale=1.0, ih_vhalf=-80.4, "
         "ih_tau_scale=1.0, na_act_vhalf=-46.0, na_act_slope=11.0, "
         "dendrite_kht_scale=0.0, temperature=35.0, q10=3.0, "
-        "klt_to_leak=None)"
+        "q10_conductance=2.0, klt_to_leak=None)"
     )
 
 
@@ -211,7 +211,7 @@ def test_describe_names_klt_to_leak(kind):
     m = multi.membrane(-68.0, klt_to_leak=kind)
     assert m.key == multi.membrane(-68.0).key
     assert _dispatch.describe("multi", 3, -68.0, mem=m).endswith(
-        f"q10=3.0, klt_to_leak={kind!r})"
+        f"q10=3.0, q10_conductance=2.0, klt_to_leak={kind!r})"
     )
 
 
