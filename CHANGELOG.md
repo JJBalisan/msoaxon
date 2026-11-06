@@ -6,6 +6,18 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+### Added
+
+- `PYTHON.md` has a model description per model (45-compartment,
+  two-compartment, dendritic variant): the shared gates and currents, then
+  every parameter with its value, units and source, read from the code, in
+  the manner of Nordlie, Gewaltig & Plesser 2009. One "Agreement contract"
+  paragraph states the cross-platform tolerance and cites Lopes et al. 2022;
+  the passages that said it piecemeal now point to it. Docs only, no result
+  moves. Refs #86.
+
 ## 1.10.0 (2 Nov 2026)
 
 The figures are redrawn to one style (#137): paper-width PNG plus PDF,
