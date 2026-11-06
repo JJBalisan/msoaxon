@@ -733,10 +733,9 @@ impl<R: Model> Integrator<R> {
             Some(c) if h > c => (t + c).min(t1),
             _ => t1,
         };
-        // set_step_size takes h0 only as its first guess: from a state at
-        // rest (dy near 0, as two_cpt's exact rest gives) its heuristic can
-        // return a step longer than the cap, so the first stop follows the
-        // step it chose
+        // set_step_size takes h0 only as its first guess, and its heuristic
+        // can return a step longer than a small cap, so the first stop
+        // follows the step it chose
         let mut stop = next_stop(solver.state().h, t0);
         solver.set_stop_time(stop).map_err(err)?;
         // the vector the output rows are copied out of (diffsol's vectors

@@ -294,8 +294,7 @@ def sweep(
 
     Args:
         points: The (couple12, couple21) points.
-        mode: The model mode for the searches (ignored by the two-compartment
-            model), or None.
+        mode: The model mode for the searches, or None.
         ceiling: The largest EPSG amplitude tried [nS].
         rel_tol: The relative tolerance of the thresholds.
         delay_tol: The tolerance of the window's edge [ms].
@@ -547,8 +546,7 @@ def main() -> None:
         "--mode",
         choices=("exact", "fast", "native"),
         help="model mode, as in the other scripts (default: MSOAXON_MODE, "
-        "else the library's). The two-compartment model has only its numpy "
-        "path and ignores it; the option is accepted for symmetry",
+        "else the library's)",
     )
     ap.add_argument("--workers", type=int, help="processes (default: all)")
     ap.add_argument(

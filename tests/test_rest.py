@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import pytest
 
-from msoaxon import _fast, constants as C, multi
+from msoaxon import _fast, constants as C, multi, two
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 D = multi.with_dendrites()
@@ -95,6 +95,56 @@ def test_axon_rest_needs_a_rebalance():
 def test_axon_rest_must_be_finite(bad):
     with pytest.raises(ValueError, match="axon_rest must be finite"):
         multi.membrane(-58.0, rebalance_rest=True, axon_rest=bad)
+
+
+TWO_UNSTABLE = ("EPSG", 5, 10, 100, 9, "active-full", 6, -50.0, 1)
+
+
+def test_two_cpt_warns_at_an_unstable_rest():
+    with pytest.warns(multi.UnstableRestWarning, match="node 9"):
+        two.two_cpt(*TWO_UNSTABLE, mode="exact")
+
+
+@pytest.mark.parametrize("v0", [-68.0, -58.0])
+@pytest.mark.parametrize("node", [3, 5])
+def test_two_cpt_is_quiet_at_the_published_rests(node, v0):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", multi.UnstableRestWarning)
+        two.two_cpt(
+            "EPSG", 5, 10, 0.0, node, "active-full", 6, v0, 1, mode="exact"
+        )
+
+
+def test_two_cpt_is_quiet_with_frozen_gates():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", multi.UnstableRestWarning)
+        two.two_cpt("step", 5, 10, 2.0, 3, "passive", 6, -68.0, 1, mode="exact")
+
+
+def test_two_cpt_checks_a_rest_once_and_still_warns_each_run(monkeypatch):
+    calls = []
+    instability = two._instability
+
+    def counted(*args):
+        calls.append(args)
+        return instability(*args)
+
+    monkeypatch.setattr(two, "_STABILITY", {})
+    monkeypatch.setattr(two, "_instability", counted)
+    for _ in range(2):
+        with pytest.warns(multi.UnstableRestWarning):
+            two.two_cpt(*TWO_UNSTABLE, mode="exact")
+    assert len(calls) == 1
+
+
+def test_two_cpt_rest_verdicts_are_bounded(monkeypatch):
+    monkeypatch.setattr(two, "_STABILITY", {})
+    monkeypatch.setattr(two, "_STABILITY_SIZE", 2)
+    for g in (1000.0, 1100.0, 1200.0):
+        two.two_cpt(
+            "EPSG", 5, 5.1, 0.0, 3, "active-full", 5.2, -68.0, 1, gNa2=g
+        )
+    assert len(two._STABILITY) == 2
 
 
 def test_unstable_rest_warning_is_re_exported():

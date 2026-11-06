@@ -415,9 +415,9 @@ occurs on the golden cases or the benchmark).
 step the controller's growth bounds are narrowed so that no step is proposed
 past the cap, and should one still be longer the integrator's stop time is
 moved to one `max_step` ahead. That includes a segment's first step, whose
-length diffsol's initial-step heuristic picks (from a state at rest, such as
-`two_cpt`'s exact one, it can propose one longer than the cap). Only the step
-length is bounded; the tolerances are never changed.
+length diffsol's initial-step heuristic picks, so a small cap can be shorter
+than it (the heuristic picks about 1e-4 ms from `two_cpt`'s exact rest). Only
+the step length is bounded; the tolerances are never changed.
 
 **Events.** `spike_event` and `settled_event` carry a `spec` the native segment
 reads; Rust evaluates the same functions as root functions, stops on a rising
@@ -444,12 +444,35 @@ darwin-arm64 and 1.09 on Linux x86-64. At 1e-8, as for the 45-compartment model,
 every run in `tests/test_fast.py` is at 0.59 of it or under on darwin-arm64, and
 native is the default, also as for that model.
 
-The numbers published here are exact mode's. Native agrees with them at the
-printed precision except for Goldwyn's 3% window (exact 167.4 µs, native 167.2,
-and 167.2 at rtol 1e-10), a sine `BinarySearch.m` point two search steps apart
-(exact 11559.4 pA, native 11563.1) and the passive-step peak (4.867 and 4.869
-MΩ). The tighter tolerance also corrected the passive-step `tau`, 0.1137 ms at
-1e-6 and 0.1197 at 1e-8 and 1e-10 in both modes.
+The numbers published here are exact mode's. Native is held to the golden
+traces, and at the printed precision it can differ from those numbers in the
+last digit. Windows move by up to 0.3 µs, which is enough to change how they
+round: exact and native give 199.05 and 199.07 µs for the 3% window, 167.38 and
+167.24 for Goldwyn's (167.2 at rtol 1e-10) and 215.26 and 215.53 for the Myoga
+EPSG at the 50% criterion. Goldwyn's rheobase is 2069.6 and 2069.4 pA, a sine
+`BinarySearch.m` point two search steps apart is 11559.4 and 11563.1 pA, and the
+passive-step peak is 4.867 and 4.869 MΩ. The tighter tolerance also corrected
+the passive-step `tau`, 0.1137 ms at 1e-6 and 0.1197 at 1e-8 and 1e-10 in both
+modes, on a grid of 20001 points (0.1133 and 0.1187 on `passive_step`'s default).
+
+The golden tolerance holds for the golden runs, not for every input. In a random sweep of
+stimuli, nodes and knobs, 12 of 392 runs from a stable rest went past it at a
+sample point, by at most 2.25 times. Native can also raise `Step size is too
+small` where exact finishes: 1 of 423 runs in that sweep, at a synaptic `gE` four
+times the default.
+
+An unstable rest is where the two modes part. With `active-full`, only node 45
+has a positive leading eigenvalue at −68 mV (0.08 /ms). More nodes join as the
+rest rises: from node 17, with gaps, at −65 mV, from node 7 at −62 mV and from
+node 6 at −60 and −58 mV (1.7 /ms at node 6, 38 at node 13, 57 at node 45). Nodes
+3 and 5 stay stable at all of these and at −50 mV. Exact mode starts exactly on that fixed
+point and can hold it, and native falls off it, sometimes before any input
+arrives: with no input at node 13 at −58 mV, exact stays at −58 mV and native is
+at −71.7 mV by 15 ms, and a 100 nS EPSG at node 9 at −50 mV peaks at 45.1 mV in
+exact mode and never rises in native. Neither is a resting cell's response, so
+`two_cpt` issues `UnstableRestWarning` in every mode, as `multi.membrane` does
+for a rest it rebalances. The check is a Jacobian by central differences, cached
+by the parameters' values.
 
 Speed of the 20 searches of `scripts/benchmark_search.py` (one pass at rel_tol
 1e-4, the reference not recomputed; Apple M1 Max, Python 3.13, with other work
@@ -518,7 +541,9 @@ There is no MATLAB here, so nothing was compared run-for-run. What was checked:
 
 - **Constants:** `Area.mat`, `Fractions.mat` and `Coupling.mat` match the Python
   values to 1e-12 (`tests/`).
-- **Rest:** with no input the 2-CPT model stays at `v0` to 1e-6 mV. The 45-CPT
+- **Rest:** with no input the 2-CPT model stays at `v0` to 1e-6 mV, at a stable
+  rest (see "The two-compartment model" under "Native mode" for an unstable
+  one). The 45-CPT
   model's far axon (compartment 45) settles about 0.9 mV away from it, the soma under 0.3 mV. The same happens in MATLAB, since
   `msoAxon.m` starts from rounded gating values and doesn't subtract resting
   currents.
@@ -994,8 +1019,7 @@ than the spike.
   rtol 1e-6 (remeasured in exact mode: 6.349–6.410 and 12.855–12.967 mV; the
   other rows move by under 0.0001 mV) and by 0.00 mV at the 1e-8 `two_cpt` now
   runs at (6.349, 12.855 and 17.419 mV at every step size).
-  `tests/test_somatic.py` gives each table point a tolerance from the spread it
-  had at 1e-6: 0.06 mV, but 0.12 and 0.08 mV for those two. Before
+  `tests/test_somatic.py` gives each table point a tolerance of 0.06 mV. Before
   issue #56 the pick was the argmax of d²V/dt² of the linearly interpolated
   trace, a comb with a tooth at every solver step. The dendrotoxin row then
   moved 0.6–1.9 mV under the same changes (25.08 mV on macOS against 25.97 mV on

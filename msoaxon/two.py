@@ -6,6 +6,7 @@ Currents are in pA, conductances in nS, capacitances in pF, time in ms.
 """
 
 import dataclasses
+import warnings
 
 import numpy as np
 
@@ -34,6 +35,15 @@ NA_VHALF = -NA_VHALF_NEG
 RTOL = 1e-8
 ATOL = 1e-8
 MAX_STEP = 0.1  # [ms]
+
+# _warn_if_unstable's verdicts (None or the warning's message), by the
+# parameters' values, oldest dropped first
+_STABILITY: dict[tuple[object, ...], str | None] = {}
+_STABILITY_SIZE = 64
+# A leading eigenvalue above this counts as unstable [1/ms]. Frozen gates give
+# eigenvalues of 0, which central differences can leave just above it. The rests
+# measured so far are at -0.003 or below, or at +0.08 or above.
+_UNSTABLE_ABOVE = 1e-6
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -741,6 +751,67 @@ def initial_state(P: TwoCptParams) -> np.ndarray:
     )
 
 
+def _instability(
+    P: TwoCptParams, s: _common.Stimulus, node: int, v0: float
+) -> str | None:
+    """Returns UnstableRestWarning's message for P, or None if stable.
+
+    Central differences of the quiet right-hand side at the starting
+    state, steps of 1e-6 relative (at least 1e-6 absolute), as
+    multi.rest_jacobian.
+
+    Args:
+        P: The parameters.
+        s: The stimulus settings, which a quiet right-hand side ignores.
+        node: The node the axon compartment stands for.
+        v0: The resting potential [mV].
+    """
+    x0 = initial_state(P)
+    J = np.empty((x0.size, x0.size))
+    for j in range(x0.size):
+        h = 1e-6 * max(1.0, abs(x0[j]))
+        up, down = x0.copy(), x0.copy()
+        up[j] += h
+        down[j] -= h
+        diff = np.subtract(
+            _rhs(0.0, up, P, "none", s), _rhs(0.0, down, P, "none", s)
+        )
+        J[:, j] = diff / (2 * h)
+    lead = np.linalg.eigvals(J).real.max()
+    if lead <= _UNSTABLE_ABOVE:
+        return None
+    return (
+        f"two_cpt's rest at {v0} mV, node {node}, is unstable: the leading "
+        f"eigenvalue is {lead:+.3f} /ms. A run leaves it by rounding error "
+        f"alone or stays on it, so exact and native results can differ by "
+        f"tens of mV, and neither is a resting cell's response."
+    )
+
+
+def _warn_if_unstable(
+    P: TwoCptParams, s: _common.Stimulus, node: int, v0: float
+) -> None:
+    """Issues UnstableRestWarning if two_cpt's starting state is unstable.
+
+    The verdict is cached by the parameters' values, so a search's runs
+    skip the eigenvalue problem; an unstable rest still warns every time.
+
+    Args:
+        P: The parameters.
+        s: The stimulus settings.
+        node: The node the axon compartment stands for.
+        v0: The resting potential [mV].
+    """
+    key = tuple(vars(P).values())
+    if key not in _STABILITY:
+        if len(_STABILITY) >= _STABILITY_SIZE:
+            _STABILITY.pop(next(iter(_STABILITY)))
+        _STABILITY[key] = _instability(P, s, node, v0)
+    message = _STABILITY[key]
+    if message is not None:
+        warnings.warn(message, _common.UnstableRestWarning, stacklevel=3)
+
+
 def two_cpt(
     stim_type: str,
     start: float,
@@ -883,6 +954,10 @@ def two_cpt(
             its range, an r1, t_end or max_step that is not > 0,
             klt_to_leak not None, "chord" or "slope", or an unknown
             mode.
+
+    Warns:
+        UnstableRestWarning: If the starting state is unstable, where
+            exact and native results can differ by tens of mV.
     """
     _common.check_times(t_end, max_step)
     _common.check_args(
@@ -923,6 +998,7 @@ def two_cpt(
     if stim_type == "Events":
         start, stop = s.start, s.stop  # the first and last onset
     x0 = initial_state(P)
+    _warn_if_unstable(P, s, node, v0)
     mode = _fast.resolve(mode)
     if mode in ("fast", "native"):
         build = _fast.build_two if mode == "fast" else _fast.build_two_native

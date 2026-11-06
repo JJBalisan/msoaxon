@@ -72,15 +72,13 @@ def model_kw(
         model: "multi" or "two".
         rest: The resting potential [mV].
         vhalf: The somatic Na inactivation midpoint [mV].
-        mode: The 45-compartment model's solver mode; None for
-            MSOAXON_MODE or the default.
+        mode: The solver mode; None for MSOAXON_MODE or the default.
 
     Returns:
-        The keywords for run_model; the two-compartment model ignores
-        mode, so it is left out.
+        The keywords for run_model.
     """
     if model == "two":
-        return {"soma_na_vhalf": vhalf}
+        return {"soma_na_vhalf": vhalf, "mode": mode}
     mem = multi.membrane(rest, soma_na_vhalf=vhalf, rebalance_rest=True)
     return {"mem": mem, "mode": mode}
 
@@ -300,9 +298,8 @@ def main() -> None:
         "--mode",
         default=None,
         choices=("exact", "fast", "native"),
-        help="the 45-compartment model's solver mode (default: "
-        "MSOAXON_MODE, else native when the extension is built; the "
-        "2-compartment model runs scipy whatever this is)",
+        help="the solver mode (default: MSOAXON_MODE, else native when the "
+        "extension is built)",
     )
     ap.add_argument(
         "--quick",

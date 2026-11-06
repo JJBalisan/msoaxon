@@ -294,7 +294,6 @@ RUNS = [(name, "exact") for name in sorted(CASES)] + [
     pytest.param(name, mode, marks=NEEDS_EXT)
     for mode in ("fast", "native")
     for name in sorted(CASES)
-    if CASES[name][0] == "multi"
 ]
 
 

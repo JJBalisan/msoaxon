@@ -6,6 +6,16 @@ import numpy as np
 
 from msoaxon import _solve, constants as C, synaptic
 
+
+class UnstableRestWarning(UserWarning):
+    """A resting state is unstable, so the cell doesn't stay at it.
+
+    The leading eigenvalue of the right-hand side at rest has a positive
+    real part. multi.membrane(rebalance_rest=True) issues this for the
+    rest it builds (#128), and two.two_cpt for its starting state.
+    """
+
+
 STIM_TYPES = (
     "step",
     "ramp",

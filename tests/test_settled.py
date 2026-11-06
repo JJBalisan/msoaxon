@@ -253,7 +253,6 @@ CASES = [(name, "exact") for name in sorted(RUNS)] + [
         ),
     )
     for name in sorted(RUNS)
-    if name.startswith("multi")
 ]
 
 

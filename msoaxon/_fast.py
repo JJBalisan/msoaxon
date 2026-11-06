@@ -550,6 +550,8 @@ def _build_two(
         "ramp_rise": float(_solve.RAMP_RISE),
         "epsg": (float(s.inv_peak), float(decay), float(rise)),
     }
+    if stim_type == "sine" and s.two_pi_f is None:
+        raise TypeError("a sine input needs SynParams.f, not None")
     for name in ("slope", "t_top", "two_pi_f"):
         if getattr(s, name) is not None:
             stim[name] = float(getattr(s, name))

@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["numpy", "scipy", "matplotlib"]
 
 [project.optional-dependencies]
-# the Rust right-hand side of the 45-compartment model (rust/, built with
+# the Rust right-hand sides of both models (rust/, built with
 # maturin; needs cargo). Without it msoaxon runs the numpy reference.
 fast = ["msoaxon-fast"]
 

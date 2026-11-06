@@ -199,7 +199,7 @@ def main() -> None:
     ap.add_argument(
         "--mode",
         choices=("fast", "native", "exact"),
-        help="mso_axon's mode for the 45-compartment model",
+        help="the models' mode",
     )
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument(
@@ -229,14 +229,13 @@ def run(a: argparse.Namespace, pool: futures.Executor) -> None:
     cfgs = configs(-68.0)
     if a.quick:  # the 45-compartment windows cost minutes without the extension
         cfgs = {k: v for k, v in cfgs.items() if k in QUICK_CONFIGS}
-    if a.mode:  # the mode applies to the 45-compartment model only
-        for model, _, kw in cfgs.values():
-            if model == "multi":
-                kw["mode"] = a.mode
+    if a.mode:
+        for _, _, kw in cfgs.values():
+            kw["mode"] = a.mode
     print(
         f"IPSG {a.g_inh:g} nS, rise/decay {synaptic.IPSG_TAU}, reversal "
         f"{synaptic.IPSG_E_REV:g} mV; EPSG {EPSG}, margin {MARGIN:.0%}; "
-        f"45-compartment mode {mode!r}; delay = {SIGNED}"
+        f"mode {mode!r}; delay = {SIGNED}"
     )
     jobs = {
         (name, dt): pool.submit(

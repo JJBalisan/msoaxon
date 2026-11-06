@@ -1279,14 +1279,31 @@ def test_two_native_settled_stop_ends_a_subthreshold_run(quiet_native):
 
 
 @needs_ext
-def test_two_native_caps_the_first_step_from_rest(quiet_native):
-    # two_cpt starts at its exact rest, where diffsol's initial-step
-    # heuristic proposes a step past max_step; capped, the axonal EPSG at
-    # 5 ms is not stepped over
+def test_two_native_spikes_at_an_axonal_epsg_from_rest(quiet_native):
     args = ("EPSG", 5, 10, 108, 3, "active-full", 15, -68.0, 3)
     t, x = two.two_cpt(*args, mode="native")
     assert np.max(np.diff(t)) <= two.MAX_STEP + 1e-12
-    assert x[:, 1].max() > 0  # it spikes, as in exact mode
+    assert x[:, 1].max() > 0  # as in exact mode
+
+
+@needs_ext
+def test_two_native_caps_the_first_step_from_rest(quiet_native):
+    # diffsol's initial-step heuristic picks about 1e-4 ms here, whatever
+    # h0 asks for, so a smaller max_step has to bound the first step too
+    args = ("EPSG", 5, 10, 0.0, 3, "active-full", 0.002, -68.0, 1)
+    t, _ = two.two_cpt(*args, mode="native", max_step=5e-5)
+    assert np.diff(t)[0] <= 5e-5 + 1e-12
+
+
+def test_two_sine_without_a_frequency_raises_in_every_mode():
+    syn = synaptic.SynParams(f=None)
+    args = ("sine", 5, 7.5, 8500, 3, "active-full", 8, -68.0, 1, syn)
+    with pytest.raises(TypeError):
+        two.two_cpt(*args, mode="exact")
+    if _fast.available():
+        for mode in ("fast", "native"):
+            with pytest.raises(TypeError):
+                two.two_cpt(*args, mode=mode)
 
 
 @needs_ext
