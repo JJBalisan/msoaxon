@@ -26,11 +26,13 @@ R1_DEFAULT = 10.0
 NA_VHALF_NEG = 62.5
 NA_VHALF = -NA_VHALF_NEG
 
-# BDF solver settings of two_cpt (TwoCpt.m's ode15s options). Unlike
-# multi.mso_axon, whose max_step is a fraction of t_end, this model's is a
-# fixed 0.1 ms.
-RTOL = 1e-6
-ATOL = 1e-6
+# BDF solver settings of two_cpt. TwoCpt.m's ode15s options have rtol = atol =
+# 1e-6; this is multi's 1e-8, because at 1e-6 native and exact differ by the
+# golden traces' tolerance and which runs cross it depends on the platform.
+# Unlike multi.mso_axon, whose max_step is a fraction of t_end, this model's is
+# a fixed 0.1 ms.
+RTOL = 1e-8
+ATOL = 1e-8
 MAX_STEP = 0.1  # [ms]
 
 
@@ -868,10 +870,8 @@ def two_cpt(
         mode: "exact", "fast" or "native", as in mso_axon: _rhs (the
             reference), its Rust port under scipy's BDF, or the port
             under the Rust BDF integrator. None (default): MSOAXON_MODE
-            if set, else "exact", unlike mso_axon, whose default is
-            "native" with the extension: two_cpt's native runs move some
-            pinned results past their tests' tolerances (#108). See
-            _fast.
+            if set, else "native" with the extension and "exact" without
+            it, as in mso_axon. See _fast.
 
     Returns:
         (t, x) with x shaped (n_times, 11); see the module docstring for
@@ -923,8 +923,6 @@ def two_cpt(
     if stim_type == "Events":
         start, stop = s.start, s.stop  # the first and last onset
     x0 = initial_state(P)
-    if _fast.requested(mode) is None:
-        mode = "exact"  # not the extension's default "native" (#108)
     mode = _fast.resolve(mode)
     if mode in ("fast", "native"):
         build = _fast.build_two if mode == "fast" else _fast.build_two_native

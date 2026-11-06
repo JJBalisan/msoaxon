@@ -633,7 +633,6 @@ def test_run_model_passes_mode_to_both_models(fake_ext):
     assert fake_ext == [("fast", "EPSGpair"), ("fast", "none")]
     _dispatch.run_model("multi", *args, mode="exact")
     _dispatch.run_model("two", *args, mode="exact")
-    _dispatch.run_model("two", *args)  # two_cpt's default stays exact
     assert len(fake_ext) == 2
     _dispatch.run_model("two", *args, mode="fast")
     _dispatch.run_model("two", *args, mode="native")
@@ -645,13 +644,14 @@ def test_run_model_passes_mode_to_both_models(fake_ext):
     ]
 
 
-def test_two_cpt_default_is_exact_unless_the_env_asks(fake_ext, monkeypatch):
+def test_two_cpt_default_is_native_unless_the_env_asks(fake_ext, monkeypatch):
     args = ("EPSGpair", 5, 5.1, 30, 3, "active-full", 8, -68.0, 1)
-    two.two_cpt(*args)
-    assert fake_ext == []
-    monkeypatch.setenv(_fast.MODE_ENV, "native")
+    monkeypatch.delenv(_fast.MODE_ENV, raising=False)
     two.two_cpt(*args)
     assert fake_ext == [("two native", "EPSGpair"), ("two native", "none")]
+    monkeypatch.setenv(_fast.MODE_ENV, "exact")
+    two.two_cpt(*args)
+    assert len(fake_ext) == 2
 
 
 def test_pool_workers_inherit_the_mode_env(monkeypatch, no_env):
@@ -1226,36 +1226,9 @@ def test_two_runs_are_bit_identical_here(stim_name, input_node, quiet_native):
     np.testing.assert_array_equal(y1, y2)
 
 
-# Open (#108, for JJ): two_cpt integrates at TwoCpt.m's rtol = atol = 1e-6 and
-# multi at 1e-8, so at 1e-6 several runs sit on multi's tolerance below, at one
-# upstroke sample each, and which ones cross it depends on the platform and the
-# model. As a share of what is allowed, on darwin-arm64: sine 1.24, Synaptic
-# 0.99 (1.09 on Linux x86-64), EPSG 0.91, Events 0.90, EPSG at the axon 0.84.
-# The KHT fix (#160) moved these: the axonal inputs were up to 2.3 before it.
-# Against an exact run at 1e-10 native is no worse than exact on the sine
-# (0.0083 against 0.0156 mV). Not loosened. Marked at 0.8 and up, and not
-# strict, since close runs can land either side;
-# test_two_native_matches_exact_at_1e8 is the guard that does not drift, with
-# every run strict and at 0.59 or under on darwin-arm64.
-TWO_DRIFT = pytest.mark.xfail(
-    strict=False, reason="near multi's tolerance at two_cpt's rtol 1e-6"
-)
-TWO_DRIFT_RUNS = {
-    ("sine", 1),
-    ("Synaptic", 1),
-    ("EPSG", 1),
-    ("Events/many", 1),
-    ("EPSG", 3),
-    ("EPSGpair", 3),
-    ("Synaptic", 3),
-}
-TWO_NATIVE_RUNS = [
-    pytest.param(*run, marks=TWO_DRIFT) if run in TWO_DRIFT_RUNS else run
-    for run in TWO_RUNS
-]
-
-
-def _assert_two_native_matches_exact(stim_name, input_node):
+@needs_ext
+@pytest.mark.parametrize(("stim_name", "input_node"), TWO_RUNS)
+def test_two_native_matches_exact(stim_name, input_node, quiet_native):
     # the golden traces' tolerance (tests/test_golden.py), as multi's
     # native mode is held to
     stim, start, stop, amp, syn_kw = TWO_STIMULI[stim_name]
@@ -1276,28 +1249,6 @@ def _assert_two_native_matches_exact(stim_name, input_node):
 
 
 @needs_ext
-@pytest.mark.parametrize(("stim_name", "input_node"), TWO_NATIVE_RUNS)
-def test_two_native_matches_exact(stim_name, input_node, quiet_native):
-    _assert_two_native_matches_exact(stim_name, input_node)
-
-
-@needs_ext
-@pytest.mark.parametrize(("stim_name", "input_node"), TWO_RUNS)
-def test_two_native_matches_exact_at_1e8(
-    stim_name, input_node, quiet_native, monkeypatch
-):
-    # at the solver tolerance multi runs at, so a port bug can't pass as drift
-    monkeypatch.setattr(two, "RTOL", 1e-8)
-    monkeypatch.setattr(two, "ATOL", 1e-8)
-    _assert_two_native_matches_exact(stim_name, input_node)
-
-
-# Open (#108, for JJ): 1.04x over since the KHT fix (#160), 1.04e-4 mV in V1
-# and V2; see TWO_DRIFT.
-@needs_ext
-@pytest.mark.xfail(
-    strict=False, reason="near this tolerance at two_cpt's rtol 1e-6"
-)
 def test_two_native_spike_stop_agrees_with_scipys_event(quiet_native):
     args = ("EPSGpair", 5, 5.2, 100, 3, "active-full", 20, -68.0, 1)
     kw = {"stop_on_spike": 20.0}
@@ -1309,12 +1260,7 @@ def test_two_native_spike_stop_agrees_with_scipys_event(quiet_native):
 
 
 @needs_ext
-@pytest.mark.xfail(
-    strict=False,
-    reason="1.15e-6 ms apart at two_cpt's rtol 1e-6; multi's bound is for 1e-8",
-)
 def test_two_native_spike_time_within_multis_bound(quiet_native):
-    # open (#108, for JJ): multi's 1e-6 ms, not loosened
     args = ("EPSGpair", 5, 5.2, 100, 3, "active-full", 20, -68.0, 1)
     kw = {"stop_on_spike": 20.0}
     t_f, _ = two.two_cpt(*args, mode="fast", **kw)

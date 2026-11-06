@@ -262,8 +262,7 @@ def test_settled_stop_is_unchanged_by_the_voltage_only_check(
     name, mode, monkeypatch
 ):
     args, factor, kw = RUNS[name]
-    if args[0] == "multi":
-        kw = {**kw, "mode": mode}
+    kw = {**kw, "mode": mode}
     t, y = _dispatch.run_model(
         *args, stop_on_spike=factor, stop_when_settled=True, **kw
     )
