@@ -283,3 +283,27 @@ def test_a_rebalanced_rest_follows_the_knobs(axon_rest):
         warnings.simplefilter("ignore", multi.UnstableRestWarning)
         plain = multi.membrane(-60.0, rebalance_rest=True, axon_rest=axon_rest)
     assert not np.array_equal(mem.vlk, plain.vlk)
+
+
+def test_feeding_a_knobbed_morph_back_keeps_its_dendritic_kht():
+    m1 = multi.membrane(-68.0, morph=D, dendrite_kht_scale=0.5)
+    again = multi.membrane(-68.0, morph=m1.morph, ih_density_scale=2.0)
+    np.testing.assert_array_equal(again.morph.g_kht, m1.morph.g_kht)
+    assert again.morph.g_kht[N:].max() > 0
+
+
+@pytest.mark.parametrize("temperature", [1e5, -1e5])
+def test_an_extreme_temperature_is_a_value_error(temperature):
+    with pytest.raises(ValueError, match="temperature"):
+        multi.membrane(-68.0, temperature=temperature)
+
+
+@pytest.mark.parametrize(
+    "knob,value",
+    [("ih_vhalf", -70.0), ("na_act_vhalf", -48.0), ("temperature", 30.0)],
+)
+def test_klt_to_leak_morphology_key_follows_the_rest_knobs(knob, value):
+    kw = {"rebalance_rest": True, "klt_to_leak": "chord"}
+    a = multi.membrane(-60.0, **kw)
+    b = multi.membrane(-60.0, **kw, **{knob: value})
+    assert a.morph.key != b.morph.key

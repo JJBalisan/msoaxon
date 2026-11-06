@@ -866,7 +866,15 @@ than the spike.
   honour every knob: the numbers the Rust right-hand side already takes from
   Python (`_fast._gating(mem)`) carry them, so `rust/` is unchanged, and
   `tests/test_fast.py` checks the Rust right-hand side against `_rhs` with
-  every knob off its default. `describe()` names them.
+  every knob off its default, each config using its own `mem.morph`.
+  `describe()` names them.
+
+  The curve and density knobs (`na_act_*`, `ih_*`, `dendrite_kht_scale`)
+  move the model's rest. Without `rebalance_rest=True` the gates start at
+  `msoAxon.m`'s literals, so a model type that freezes a gate ignores the
+  matching knob (`na_act_*` in a frozen-m model) and the cell can drift from
+  `v0` or fire at zero input. Pair them with `rebalance_rest=True`, which
+  re-balances the leak at the new gates and keeps rest at `v0`.
 
 The defaults are `msoAxon.m`'s membrane, unchanged.
 

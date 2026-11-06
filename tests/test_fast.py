@@ -157,17 +157,25 @@ def configs():
         "temperature": 27.0,
         "q10": 2.4,
     }
+    # the morph is each mem's own: ih_density_scale and dendrite_kht_scale
+    # live in mem.morph, so only it carries them into either right-hand side
+    lumped_knobbed = multi.membrane(
+        -60.0, soma_klt_scale=3, rebalance_rest=True, **knobs
+    )
     out["mem/gate-knobs"] = (
         STIMULI["EPSGpair"],
         "active-full",
-        multi.membrane(-60.0, soma_klt_scale=3, rebalance_rest=True, **knobs),
-        multi.LUMPED,
+        lumped_knobbed,
+        lumped_knobbed.morph,
+    )
+    dendrite_knobbed = multi.membrane(
+        -68.0, morph=D, dendrite_kht_scale=0.7, **knobs
     )
     out["dendrites/gate-knobs"] = (
         bilateral,
         "active-full",
-        multi.membrane(-68.0, morph=D, dendrite_kht_scale=0.7, **knobs),
-        D,
+        dendrite_knobbed,
+        dendrite_knobbed.morph,
     )
     out["dendrites/mem"] = (
         bilateral,
@@ -1002,7 +1010,11 @@ def test_native_and_fast_honour_the_gate_knobs(quiet_native, monkeypatch):
     # default membrane (it does not silently ignore them)
     monkeypatch.setitem(_fast._STATE, "warned", True)
     mem = multi.membrane(
-        -68.0, ih_vhalf=-72.0, na_act_vhalf=-50.0, temperature=27.0
+        -68.0,
+        ih_density_scale=2.0,
+        ih_vhalf=-72.0,
+        na_act_vhalf=-50.0,
+        temperature=27.0,
     )
     args = ("EPSGpair", 5, 5.1, 30, 3, "active-full", 8, -68.0, 1)
     t_e, x_e = multi.mso_axon(*args, mem=mem, mode="exact")

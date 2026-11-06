@@ -746,7 +746,8 @@ def _scale_channels(
     if ih_density_scale == 1.0 and dendrite_kht_scale == 0.0:
         return morph
     g_h, g_kht = morph.g_h * ih_density_scale, morph.g_kht.copy()
-    g_kht[N:] = dendrite_kht_scale * C.G_KHT[0]
+    if dendrite_kht_scale != 0.0:  # else keep any KHT morph already has
+        g_kht[N:] = dendrite_kht_scale * C.G_KHT[0]
     return dataclasses.replace(
         morph,
         key=(
@@ -850,7 +851,7 @@ def membrane(
         na_act_vhalf: The Na activation midpoint [mV], in every
             compartment (default: -46, Scott et al 2010). Together with
             na_act_slope it sets the subthreshold-oscillation regime of
-            Bondy et al 2021 (J Neurosci 41:3337); the inactivation
+            Bondy et al 2021 (J Neurosci 41:6234); the inactivation
             midpoint is soma_na_vhalf.
         na_act_slope: The Na activation slope factor k [mV], positive
             (default: 11).
@@ -887,7 +888,9 @@ def membrane(
             rebalance_rest or is not finite, ih_density_scale or
             dendrite_kht_scale is negative or not finite, ih_tau_scale,
             na_act_slope or q10 is not positive and finite, or
-            ih_vhalf, na_act_vhalf or temperature is not finite.
+            ih_vhalf, na_act_vhalf or temperature is not finite, or
+            temperature and q10 give a rate factor that overflows or
+            underflows to zero.
         RuntimeError: If the steady state of a rebalanced rest cannot
             be found.
 
@@ -925,8 +928,16 @@ def membrane(
     morph = _scale_channels(morph, ih_density_scale, dendrite_kht_scale)
     na_act = (-float(na_act_vhalf), -float(na_act_slope))
     ih_vh = -float(ih_vhalf)
-    rate = float(q10) ** ((float(temperature) - 35.0) / 10)
+    try:
+        rate = float(q10) ** ((float(temperature) - 35.0) / 10)
+    except OverflowError:
+        rate = math.inf
     ih_rate = rate / float(ih_tau_scale)
+    if not (math.isfinite(rate) and rate > 0 and math.isfinite(ih_rate)):
+        raise ValueError(
+            f"temperature {temperature} with q10 {q10} gives a rate factor "
+            f"{rate} that is not finite and positive"
+        )
     g_klt = morph.g_klt.copy()
     g_klt[0] *= soma_klt_scale
     g_klt[1:3] *= ais_klt_scale
@@ -961,6 +972,12 @@ def membrane(
                 float(ais_klt_scale),
                 float(dendrite_klt_scale),
                 axon_rest,  # sets v_rest, where the leak is built
+                # the gates the rest is found with
+                na_act[0],
+                na_act[1],
+                ih_vh,
+                rate,
+                ih_rate,
             ),
             v_rest=v_rest,
         )
