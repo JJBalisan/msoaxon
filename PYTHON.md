@@ -454,7 +454,7 @@ same bits as before.
 | `area_ratio` | axon to soma area ratio (sets the axon's time constant and capacitance) | > 0 |
 | `klt1`, `klt2`, `h1`, `h2`, `na1` | fraction of the compartment's resting conductance that is KLT, h and (soma) Na; a compartment's fractions sum to at most 1 | [0, 1] |
 | `gNa2` | axonal Na conductance [nS] | ≥ 0 |
-| `gKHT` | somatic KHT conductance [nS], for model types with KHT; default 875 | ≥ 0 |
+| `gKHT` | somatic KHT conductance [nS], for model types with KHT; default from its resting fraction; the leak gives up its resting conductance | ≥ 0 |
 | `soma_na_vhalf`, `axon_na_vhalf` | Na inactivation midpoint [mV] (default −62.5); see "Somatic spike" | finite |
 | `klt_to_leak` | replace the soma's and the axon's KLT by a leak that keeps rest: `"chord"` adds the KLT conductance at rest, `"slope"` the slope of the model's own steady-state KLT current (z frozen at rest); `None` keeps KLT. Scaled by `klt1`, `klt2`. See "Resonance" and "Inhibition" | `None`, `"chord"`, `"slope"` |
 
