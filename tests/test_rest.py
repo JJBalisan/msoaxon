@@ -110,8 +110,8 @@ def test_axon_rest_is_part_of_the_key():
     b = _quiet(
         lambda: multi.membrane(-60.0, rebalance_rest=True, axon_rest=-64)
     )
-    assert a.key[-1] == multi.AXON_REST == -68.0
-    assert b.key[-1] == -64.0
+    assert a.key[6] == multi.AXON_REST == -68.0
+    assert b.key[6] == -64.0
     assert a.key != b.key
 
 

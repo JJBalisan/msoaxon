@@ -15,7 +15,8 @@ from msoaxon import _common, _solve, constants as C, synaptic
 # 15:e1006476), the paper this model's coupling-constant framework comes from.
 # TwoCpt.m still carries them as comments (%8.5, %-58) beside the values it
 # replaced them with.
-GOLDWYN_2019 = {"r1": 8.5, "tau_est": 0.34, "v0": -58.0}
+# Their model has Na and KLT but no KHT, hence the 0.
+GOLDWYN_2019 = {"r1": 8.5, "tau_est": 0.34, "v0": -58.0, "gKHT": 0.0}
 
 # Soma input resistance of TwoCpt.m [MOhm]: the default of r1 below.
 R1_DEFAULT = 10.0
@@ -70,6 +71,7 @@ class TwoCptParams:
         IKLT0_1: Somatic KLT current at rest, subtracted [pA].
         IKLT0_2: Axonal KLT current at rest, subtracted [pA].
         Ih0_1: Somatic h current at rest, subtracted [pA].
+        IKHT0: Somatic KHT current at rest, subtracted [pA].
         Ih0_2: Axonal h current at rest, subtracted [pA].
         z_rest: KLT inactivation at rest, frozen in this model.
         na_vhalf1: Somatic Na inactivation midpoint, negated as
@@ -107,6 +109,7 @@ class TwoCptParams:
     IKLT0_1: float
     IKLT0_2: float
     Ih0_1: float
+    IKHT0: float
     Ih0_2: float
     z_rest: float
     na_vhalf1: float = NA_VHALF_NEG
@@ -266,6 +269,58 @@ def _channels(
     return klt1, klt2, h1, h2, na1, gNa2
 
 
+def _somatic_kht(
+    model_type: str, gKHT: float | None, gTot1: float, Vr: float
+) -> float:
+    """Resolves the somatic KHT conductance for a model type.
+
+    The default comes from the resting fractions, as every other
+    conductance here does: KHT's share of the 45-compartment soma's resting
+    conductance, at gTot1 and Vr. TwoCpt.m has 0.1 / SA(1) * 1000 (0.0114
+    nS), which left KHT with no effect.
+
+    Args:
+        model_type: The channel set.
+        gKHT: The conductance asked for [nS]; None: the default.
+        gTot1: The soma's total resting conductance [nS].
+        Vr: The resting potential [mV].
+
+    Returns:
+        The conductance [nS]; 0 for a model type without KHT.
+
+    Raises:
+        ValueError: If gKHT is negative or NaN.
+    """
+    if gKHT is not None and not gKHT >= 0.0:
+        raise ValueError(f"gKHT must be >= 0, got {gKHT}")
+    if model_type not in ("active-KHT", "active-full"):
+        return 0.0
+    return float(C.KHT_FRAC[0] * gTot1 / C.pinf(Vr)) if gKHT is None else gKHT
+
+
+def _somatic_leak(shares: float, gKHT: float, gTot1: float, Vr: float) -> float:
+    """Returns what the channels leave of the soma's resting conductance.
+
+    Args:
+        shares: The KLT, h and Na fractions, summed.
+        gKHT: The KHT conductance [nS].
+        gTot1: The soma's total resting conductance [nS].
+        Vr: The resting potential [mV].
+
+    Returns:
+        The leak conductance [nS].
+
+    Raises:
+        ValueError: If that leaves a negative leak conductance.
+    """
+    glk1 = (1 - shares) * gTot1 - gKHT * C.pinf(Vr)
+    if glk1 < -1e-9 * gTot1:
+        raise ValueError(
+            "the soma's fractions and KHT leave it a negative leak conductance"
+        )
+    return glk1
+
+
 def get_params(
     v0: float,
     node: int,
@@ -284,6 +339,7 @@ def get_params(
     h2: float | None = None,
     na1: float | None = None,
     gNa2: float | None = None,
+    gKHT: float | None = None,
     soma_na_vhalf: float = NA_VHALF,
     axon_na_vhalf: float = NA_VHALF,
     klt_to_leak: str | None = None,
@@ -322,6 +378,10 @@ def get_params(
             the default V-half; it calibrates the somatic gNa1.
         gNa2: Axonal Na conductance [nS], >= 0; the lookup has a
             calibrated value for nodes 3 and 5 only.
+        gKHT: Somatic KHT conductance [nS], >= 0, for the model types
+            that have KHT (default: its share of the resting conductance
+            in Lehnert et al 2014's densities, 823 nS at -68 mV and 156 at
+            -58). It takes its resting conductance from the leak.
         soma_na_vhalf: Somatic Na inactivation midpoint [mV]; Scott et
             al 2010 measured -77. gNa1 stays calibrated at the default
             (-62.5), so a shift changes how many channels are available
@@ -373,12 +433,6 @@ def get_params(
         node, model_type, klt1, klt2, h1, h2, na1, gNa2
     )
 
-    gKHT = (
-        0.1 / C.SA[0] * 1000
-        if model_type in ("active-KHT", "active-full")
-        else 0.0
-    )
-
     R1 = r1 * 1e-3  # input resistance to CPT1 [GOhm]
     Vrest = Elk = v0
     VK = EK = -90.0
@@ -400,7 +454,8 @@ def get_params(
     Vh = -35.0
     gh1 = h1 * gTot1 / C.ainf(Vr)
     gh2 = h2 * gTot2 / C.ainf(Vr)
-    glk1 = (1 - klt1 - h1 - na1) * gTot1
+    gKHT = _somatic_kht(model_type, gKHT, gTot1, Vr)
+    glk1 = _somatic_leak(klt1 + h1 + na1, gKHT, gTot1, Vr)
     glk2 = (1 - klt2 - h2) * gTot2
     # calibrated at the default V-half whatever soma_na_vhalf is
     gNa1 = na1 * gTot1 / C.na_open(C.minf(Vr), C.hinf(Vr))
@@ -450,6 +505,7 @@ def get_params(
         IKLT0_1=IKLT0_1,
         IKLT0_2=IKLT0_2,
         Ih0_1=gh1 * h_rest,
+        IKHT0=gKHT * C.pinf(Vr) * (Vr - VK),
         Ih0_2=gh2 * h_rest,
         z_rest=C.zinf(Vr),  # z is frozen at rest in this model
         na_vhalf1=na_vhalf1,
@@ -576,7 +632,7 @@ def _dv(
     """
     V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x
     z = P.z_rest
-    IKHT = P.gKHT * p * (V1 - P.VK)
+    IKHT = P.gKHT * p * (V1 - P.VK) - P.IKHT0
     INa1 = C.na_open(m1, h1, P.gNa1) * (V1 - P.ENa) - P.INa0_1
     Ilk1 = P.glk1 * (V1 - P.Elk)
     IKLT1 = P.gKLT1 * w1**4 * z * (V1 - P.EK) - P.IKLT0_1
@@ -611,9 +667,9 @@ def _rhs(
     V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x
     z = P.z_rest  # KLT inactivation is frozen at rest in this model
 
-    # soma: KHT exists only here. Na, KLT and h have their value at rest
-    # subtracted (the *0 terms from get_params); KHT and leak don't
-    IKHT = P.gKHT * p * (V1 - P.VK)
+    # soma: KHT exists only here. Na, KLT, h and KHT have their value at rest
+    # subtracted (the *0 terms from get_params); leak doesn't
+    IKHT = P.gKHT * p * (V1 - P.VK) - P.IKHT0
     INa1 = C.na_open(m1, h1, P.gNa1) * (V1 - P.ENa) - P.INa0_1
     Ilk1 = P.glk1 * (V1 - P.Elk)
     IKLT1 = P.gKLT1 * w1**4 * z * (V1 - P.EK) - P.IKLT0_1
@@ -708,6 +764,7 @@ def two_cpt(
     h2: float | None = None,
     na1: float | None = None,
     gNa2: float | None = None,
+    gKHT: float | None = None,
     soma_na_vhalf: float = NA_VHALF,
     axon_na_vhalf: float = NA_VHALF,
     klt_to_leak: str | None = None,
@@ -795,6 +852,8 @@ def two_cpt(
         na1: Fraction that is Na, in [0, 1], at the default V-half;
             the soma only (the axon's Na is the conductance gNa2).
         gNa2: Axonal Na conductance [nS], >= 0.
+        gKHT: Somatic KHT conductance [nS], >= 0 (default: from the
+            resting fractions, see get_params).
         soma_na_vhalf: Somatic Na inactivation midpoint [mV]; the Na
             conductance gNa1 stays calibrated at the default -62.5, and
             the resting Na current is subtracted at the shifted value,
@@ -843,6 +902,7 @@ def two_cpt(
         h2=h2,
         na1=na1,
         gNa2=gNa2,
+        gKHT=gKHT,
         soma_na_vhalf=soma_na_vhalf,
         axon_na_vhalf=axon_na_vhalf,
         klt_to_leak=klt_to_leak,
