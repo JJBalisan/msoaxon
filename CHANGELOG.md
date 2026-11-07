@@ -6,7 +6,7 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
-## Unreleased
+## 1.12.0 (7 Nov 2026)
 
 `two_cpt` now runs at the 45-compartment model's solver tolerance and, with the
 extension, in native mode, which makes the searches' two-compartment runs about
@@ -32,9 +32,10 @@ differ by tens of mV, and `two_cpt` now warns.
 - `two.RTOL` and `two.ATOL` are 1e-8, not `TwoCpt.m`'s 1e-6: at 1e-6 native and
   exact differ by about the golden tolerance, and which runs cross it depends on
   the platform. In exact mode the passive-step `tau` goes from 0.1137 to 0.1197
-  ms on a grid of 20001 points, its value at 1e-10 too, the 3% window from 198.9 to 199.0 µs, Goldwyn's from
-  167.2 to 167.4 µs and the subthreshold resonance from 354 to 355 Hz; the
-  somatic spike's `max_step` spread of up to 0.11 mV goes to 0 (#108).
+  ms on a grid of 20001 points, its value at 1e-10 too, the 3% window from 198.9
+  to 199.0 µs, Goldwyn's from 167.2 to 167.4 µs and the subthreshold resonance
+  from 354 to 355 Hz; the somatic spike's `max_step` spread of up to 0.11 mV goes
+  to 0 (#108).
 - `two_cpt`'s default mode is `mso_axon`'s: `MSOAXON_MODE` if set, else `"native"`
   with the extension and `"exact"` without it (#108).
 - `rust/src/integrate.rs` runs over a `Model` trait (`MultiRhs` with the
