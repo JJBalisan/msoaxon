@@ -6,7 +6,7 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
-## Unreleased
+## 1.12.1 (7 Nov 2026)
 
 Fixes to 1.12.0's `UnstableRestWarning` for `two_cpt`. No published number
 moves.
