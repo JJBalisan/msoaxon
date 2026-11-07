@@ -13,7 +13,15 @@ import warnings
 import numpy as np
 import pytest
 
-from msoaxon import _fast, constants as C, multi, two
+from msoaxon import (
+    _common,
+    _fast,
+    _parallel,
+    constants as C,
+    multi,
+    synaptic,
+    two,
+)
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 D = multi.with_dendrites()
@@ -121,16 +129,113 @@ def test_two_cpt_is_quiet_with_frozen_gates():
         two.two_cpt("step", 5, 10, 2.0, 3, "passive", 6, -68.0, 1, mode="exact")
 
 
+def test_two_cpt_warns_at_the_caller():
+    with pytest.warns(multi.UnstableRestWarning) as record:
+        two.two_cpt(*TWO_UNSTABLE, mode="exact")
+    assert record[0].filename == __file__
+
+
+def test_two_cpt_reports_the_leading_eigenvalue():
+    # pinned values, so a Jacobian off by a factor fails
+    with pytest.warns(multi.UnstableRestWarning, match=r"is \+73\.711 /ms"):
+        two.two_cpt(*TWO_UNSTABLE, mode="exact")
+    s = _common.stimulus("EPSG", 5, 10, 0.0, 6, synaptic.SynParams(t_end=6))
+    P = two.get_params(-68.0, 3, 1, "active-full")
+    assert two._leading_eigenvalue(P, s) == pytest.approx(-0.00299, rel=1e-3)
+
+
+def test_two_cpt_threshold_sits_between_the_closest_rests():
+    # the least unstable rest measured, +0.0088 /ms; the published rests lead
+    # at -0.0028 /ms or below (test_two_cpt_is_quiet_at_the_published_rests)
+    with pytest.warns(multi.UnstableRestWarning, match=r"is \+0\.009 /ms"):
+        two.two_cpt(
+            "EPSG", 5, 10, 0.0, 32, "active-full", 6, -65.0, 1, mode="exact"
+        )
+
+
+# explicit values for every per-node lookup, so nodes 9 and 20 share P
+SAME_P = {
+    "couple12": C.COUPLING1[7],
+    "couple21": C.COUPLING2[7],
+    "area_ratio": C.AREA_RATIO[8],
+    "klt1": C.KLT_FRAC[0],
+    "klt2": C.KLT_FRAC[8],
+    "h1": C.H_FRAC[0],
+    "h2": C.H_FRAC[8],
+    "na1": C.NA_FRAC[0],
+    "gNa2": 140.0,
+}
+
+
+def test_two_cpt_names_each_runs_own_node(monkeypatch):
+    # one cached verdict serves both nodes; the message is the run's own
+    monkeypatch.setattr(two, "_STABILITY", {})
+    for node in (9, 20):
+        with pytest.warns(multi.UnstableRestWarning, match=f"node {node},"):
+            two.two_cpt(
+                "EPSG", 5, 10, 0.0, node, "active-full", 6, -58.0, 1,
+                mode="exact", **SAME_P,
+            )  # fmt: skip
+    assert len(two._STABILITY) == 1
+
+
+def test_two_cpt_verdicts_follow_every_parameter(monkeypatch):
+    # the same gNa2 at two rests: unstable at -50 mV, stable at -68 mV
+    monkeypatch.setattr(two, "_STABILITY", {})
+    with pytest.warns(multi.UnstableRestWarning):
+        two.two_cpt(
+            "EPSG", 5, 10, 0.0, 9, "active-full", 6, -50.0, 1, mode="exact",
+            gNa2=140.0,
+        )  # fmt: skip
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", multi.UnstableRestWarning)
+        two.two_cpt(
+            "EPSG", 5, 10, 0.0, 9, "active-full", 6, -68.0, 1, mode="exact",
+            gNa2=140.0,
+        )  # fmt: skip
+
+
+def test_pool_workers_follow_the_parents_warning_filters():
+    # two_cpt warns in the worker that runs it, so a filter set in the
+    # parent (here "error", the one a worker's result can show) must reach it
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", multi.UnstableRestWarning)
+        with _parallel.process_pool(1) as pool:
+            run = pool.submit(two.two_cpt, *TWO_UNSTABLE, mode="exact")
+            with pytest.raises(multi.UnstableRestWarning, match="node 9"):
+                run.result()
+
+
+def test_pool_workers_get_only_filters_for_msoaxon_warnings():
+    class Local(UserWarning):
+        pass
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", Local)  # could not unpickle in a worker
+        warnings.simplefilter("ignore", DeprecationWarning)
+        warnings.filterwarnings("ignore", "probe", multi.UnstableRestWarning)
+        sent = _parallel.warning_filters()
+    categories = [category for _, _, category, _, _ in sent]
+    assert Local not in categories
+    assert DeprecationWarning not in categories
+    action, message, category, _, _ = sent[0]
+    assert (action, message.pattern, category) == (
+        "ignore",
+        "probe",
+        multi.UnstableRestWarning,
+    )
+
+
 def test_two_cpt_checks_a_rest_once_and_still_warns_each_run(monkeypatch):
     calls = []
-    instability = two._instability
+    leading = two._leading_eigenvalue
 
     def counted(*args):
         calls.append(args)
-        return instability(*args)
+        return leading(*args)
 
     monkeypatch.setattr(two, "_STABILITY", {})
-    monkeypatch.setattr(two, "_instability", counted)
+    monkeypatch.setattr(two, "_leading_eigenvalue", counted)
     for _ in range(2):
         with pytest.warns(multi.UnstableRestWarning):
             two.two_cpt(*TWO_UNSTABLE, mode="exact")
