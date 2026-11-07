@@ -1128,8 +1128,8 @@ def _height_key(
     input_node2: int | None = None,
 ) -> tuple[Any, ...]:
     """Names everything that shapes spike_height()'s runs, hashably."""
-    if model == "multi":  # the mode the runs will use, not the one asked for
-        model_kw = {**model_kw, "mode": _fast.effective(model_kw.get("mode"))}
+    # the mode the runs will use, not the one asked for
+    model_kw = {**model_kw, "mode": _fast.effective(model_kw.get("mode"))}
     return (
         model,
         int(node),
@@ -1157,7 +1157,7 @@ def spike_height(
 
     The height is the largest axon - soma of one coincident EPSG pair at
     HEIGHT_AT (2x) the 10 mV threshold, run to T_END with no spike stop.
-    It is flat there (within 2.5% from 1.5x to 3x threshold), so the
+    It is flat there (within 5% from 1.5x to 3x threshold), so the
     10 mV threshold that seeds it doesn't bias it: 38.4 mV for the
     45-compartment model, 38.0 for TwoCpt.m, 20.2 with Goldwyn's
     calibration (model EPSG). It costs one threshold search plus one run,

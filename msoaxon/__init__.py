@@ -3,9 +3,9 @@
 The models live in msoaxon.multi and msoaxon.two (named after the
 model="multi" / "two" switch the analysis functions use); the package
 re-exports their entry points, mso_axon and two_cpt, and DriftWarning, the
-warning mso_axon's Rust right-hand side (mode="fast") issues on first use,
-and UnstableRestWarning, the warning multi.membrane(rebalance_rest=True)
-issues when the rest it builds is unstable (silence either with
+warning the models' Rust right-hand sides (mode="fast") issue on first use,
+and UnstableRestWarning, the warning multi.membrane(rebalance_rest=True) and
+two_cpt issue when the rest is unstable (silence either with
 warnings.simplefilter("ignore", msoaxon.<name>)).
 It also re-exports process_pool and map_tasks, the worker-pool helpers the
 analysis scripts share, and the initiation-site readout (msoaxon.initiation):

@@ -16,8 +16,8 @@ the two-compartment model of TwoCpt.m, printed as tables and saved as JSON:
    probability 0.45), with a small default number of trials.
 
 Runs in the default mode (native when the Rust extension is installed: the
-Rust BDF integrator for the 45-compartment model, within solver tolerance of
-the reference). --mode fast keeps scipy's BDF over the Rust right-hand side
+Rust BDF integrator for both models, within solver tolerance of the
+reference). --mode fast keeps scipy's BDF over the Rust right-hand side
 (bit-identical to the reference here, about 8x slower), --mode exact the
 numpy reference, and the tables say which ran.
 """  # noqa: E501 (printed verbatim as --help)
@@ -48,8 +48,8 @@ def main() -> None:
     ap.add_argument(
         "--mode",
         choices=("fast", "native", "exact"),
-        help="mso_axon's mode for the 45-compartment model (default: "
-        "native when the extension is installed)",
+        help="the models' mode (default: native when the extension is "
+        "installed)",
     )
     ap.add_argument("--repeats", type=int, default=8)
     ap.add_argument("--trials", type=int, default=30)
@@ -64,9 +64,9 @@ def main() -> None:
         run(a, pool)
 
 
-def _kw(a: argparse.Namespace, model: str) -> dict[str, Any]:
-    """Returns the model keywords: the mode, for the 45-compartment model."""
-    return {"mode": a.mode} if a.mode and model == "multi" else {}
+def _kw(a: argparse.Namespace) -> dict[str, Any]:
+    """Returns the model keywords: the mode."""
+    return {"mode": a.mode} if a.mode else {}
 
 
 def fibre_window(
@@ -95,7 +95,7 @@ def fibre_window(
                 n_trials=n_trials,
                 repeats=repeats,
                 executor=pool,
-                model_kw=_kw(a, model),
+                model_kw=_kw(a),
             )
             width = np.array([s["width"] for s in summ]) * 1e3
             ok = np.isfinite(width)
@@ -140,7 +140,7 @@ def prepulse(a: argparse.Namespace, pool: futures.Executor) -> dict[str, Any]:
                 g,
                 rel_tol=tol,
                 executor=pool,
-                model_kw=_kw(a, model),
+                model_kw=_kw(a),
             )
             print(
                 f"{name} | {g:g} | {th0:.2f} | "
@@ -170,7 +170,7 @@ def trains(a: argparse.Namespace, pool: futures.Executor) -> dict[str, Any]:
             rate,
             n,
             3000.0,
-            **_kw(a, model),
+            **_kw(a),
         )
         for name, model in MODELS.items()
         for rate in rates
@@ -203,7 +203,7 @@ def itd(a: argparse.Namespace, pool: futures.Executor) -> dict[str, Any]:
             itds,
             n_trials=n_trials,
             executor=pool,
-            model_kw=_kw(a, model),
+            model_kw=_kw(a),
         )
         print(
             f"{name} | {s['peak']:.2f} | {s['width'] * 1e3:.0f} | "
@@ -225,13 +225,12 @@ def run(a: argparse.Namespace, pool: futures.Executor) -> None:
     out.mkdir(parents=True, exist_ok=True)
     mode = _fast.effective(a.mode)
     print(
-        f"45-compartment model run in mode {mode!r}"
+        f"both models run in mode {mode!r}"
         + (
             " (within solver tolerance of the reference)"
             if mode == "native"
             else ""
         )
-        + "; the two-compartment model has only its numpy path"
     )
     res = {
         "mode": mode,

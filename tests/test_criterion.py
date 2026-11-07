@@ -10,6 +10,7 @@ import pytest
 from msoaxon import (
     _bisect,
     _dispatch,
+    _fast,
     coincidence,
     multi,
     somatic,
@@ -173,6 +174,23 @@ def test_height_key_follows_the_configuration_not_the_object():
         key("multi", 3, -68.0, (0.1, 0.18), {}, stim="EPSGbilateral"),
     ]
     assert len({a, *others}) == len(others) + 1
+
+
+@pytest.mark.parametrize("model", ["two", "multi"])
+def test_height_key_follows_the_effective_mode(model, monkeypatch):
+    # only effective() reads _ext here, so this runs without the extension too
+    tau = (0.1, 0.18)
+    monkeypatch.setattr(_fast, "_ext", object())
+    monkeypatch.setenv(_fast.MODE_ENV, "exact")
+    exact = coincidence._height_key(model, 3, -68.0, tau, {})
+    assert exact == coincidence._height_key(
+        model, 3, -68.0, tau, {"mode": "exact"}
+    )
+    monkeypatch.setenv(_fast.MODE_ENV, "fast")
+    assert exact != coincidence._height_key(model, 3, -68.0, tau, {})
+    # asked for fast with no extension: the runs are exact, so the key is too
+    monkeypatch.setattr(_fast, "_ext", None)
+    assert exact == coincidence._height_key(model, 3, -68.0, tau, {})
 
 
 def test_height_key_rejects_settings_it_cannot_name():

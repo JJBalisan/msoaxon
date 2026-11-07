@@ -249,13 +249,13 @@ def test_making_threshold_graphs_script(tmp_path):
         tmp_path,
     )
     # one sweep point, BinarySearch.m's rounding to 10 (unrounded: 11054.08 /
-    # 11566.77, see test_analysis.py). One flipped search decision (~1.8) can
+    # 11563.11, see test_analysis.py). One flipped search decision (~1.8) can
     # carry 11054.08 past 11055 and round it to 11060, so compare within one
     # rounding step (rel 1e-3) rather than the printed text
     multi = re.search(r"sine node 3: multi=\[([0-9.]+)\]", out)
     two = re.search(r"two  =\[([0-9.]+)\]", out)
     assert float(multi[1]) == pytest.approx(11054.08, rel=1e-3)
-    assert float(two[1]) == pytest.approx(11566.77, rel=1e-3)
+    assert float(two[1]) == pytest.approx(11563.11, rel=1e-3)
     for ext in ("png", "pdf"):
         assert (tmp_path / f"sine_thresholds_cpt3.{ext}").stat().st_size > 0
     res = json.loads((tmp_path / "sine_thresholds_cpt3.json").read_text())

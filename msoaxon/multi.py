@@ -48,13 +48,10 @@ _STABILITY: dict[tuple[Any, ...], str | None] = {}
 _STABILITY_SIZE = 64
 
 
-class UnstableRestWarning(UserWarning):
-    """A rebalanced resting state is unstable: the cell fires on its own.
-
-    membrane(rebalance_rest=True) linearises the full right-hand side at
-    the rest it builds and issues this when the leading eigenvalue has a
-    positive real part (#128).
-    """
+# membrane(rebalance_rest=True) linearises the full right-hand side at the
+# rest it builds and issues this when the leading eigenvalue has a positive
+# real part (#128)
+UnstableRestWarning = _common.UnstableRestWarning
 
 
 # which gating blocks (m, h, p, w, z, a) evolve for each model type

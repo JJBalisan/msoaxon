@@ -120,7 +120,11 @@ def test_sine_sweep_point_regression():
         "sine", 1, 3, 30, 15000, workers=1, rounded=False
     )
     assert multi == pytest.approx([11054.0771484375], rel=2e-4)
-    assert two == pytest.approx([11566.7724609375], rel=2e-4)
+    # two steps of that search apart in native and exact, so one pin each
+    want = {"native": 11563.1103515625}.get(
+        _fast.effective(None), 11559.4482421875
+    )
+    assert two == pytest.approx([want], rel=2e-4)
 
 
 # --- coincidence trials (coincidence.py) --------------------------------------

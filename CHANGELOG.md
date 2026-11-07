@@ -6,6 +6,55 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+`two_cpt` now runs at the 45-compartment model's solver tolerance and, with the
+extension, in native mode, which makes the searches' two-compartment runs about
+60 times faster. Its published numbers move a little and 23 of its golden traces
+with them, by at most 0.027 mV; the 45-compartment model's do not. At an unstable
+rest (nodes from 6 outward at −58 mV, for example) exact and native results can
+differ by tens of mV, and `two_cpt` now warns.
+
+### Added
+
+- `two_cpt(..., mode=...)`: the two-compartment model gets the Rust
+  right-hand side (`rust/src/two.rs`, `msoaxon_fast.TwoCptRhs`) and the
+  native integrator, with the modes of `mso_axon`; `_dispatch.run_model`
+  passes `mode` to both models. Fast runs are bit-identical to `"exact"` on
+  darwin-arm64; the mode is part of `two_cpt`'s quiet-prefix key (#108).
+- `two_cpt` issues `UnstableRestWarning`, in every mode, when the leading
+  eigenvalue at its starting state has a positive real part. The class moves to
+  `_common`; `multi.UnstableRestWarning` and `msoaxon.UnstableRestWarning` are
+  the same class (#108).
+
+### Changed
+
+- `two.RTOL` and `two.ATOL` are 1e-8, not `TwoCpt.m`'s 1e-6: at 1e-6 native and
+  exact differ by about the golden tolerance, and which runs cross it depends on
+  the platform. In exact mode the passive-step `tau` goes from 0.1137 to 0.1197
+  ms on a grid of 20001 points, its value at 1e-10 too, the 3% window from 198.9 to 199.0 µs, Goldwyn's from
+  167.2 to 167.4 µs and the subthreshold resonance from 354 to 355 Hz; the
+  somatic spike's `max_step` spread of up to 0.11 mV goes to 0 (#108).
+- `two_cpt`'s default mode is `mso_axon`'s: `MSOAXON_MODE` if set, else `"native"`
+  with the extension and `"exact"` without it (#108).
+- `rust/src/integrate.rs` runs over a `Model` trait (`MultiRhs` with the
+  tree solver, `TwoCptRhs` with faer's sparse LU) (#108).
+- `tests/test_golden.py` passes `mode` to the two-compartment cases too, so
+  their `"exact"` runs stay exact under any `MSOAXON_MODE`, and now also runs
+  them in fast and native mode (#108).
+- `--mode` in `scripts/na_availability.py`, `scripts/event_protocols.py` and
+  `scripts/inhibition_window.py` now applies to both models (#108).
+
+### Fixed
+
+- Native mode capped every step at `max_step` except possibly the first of
+  a segment: diffsol's initial-step heuristic can pick a longer one when the
+  cap is small. The first stop time now follows the step it chose (#108).
+- `spike_height`'s cache key has the effective mode for `two_cpt` too, so a
+  height computed under one `MSOAXON_MODE` isn't served under another (#108).
+- Native `two_cpt` with a sine input and `SynParams(f=None)` raises `TypeError`,
+  as exact mode does, instead of running with no stimulus (#108).
+
 ## 1.11.0 (6 Nov 2026)
 
 The two-compartment model's KHT is corrected, so its published numbers move a
