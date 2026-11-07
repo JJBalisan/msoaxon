@@ -2,11 +2,16 @@
 
 import multiprocessing
 import os
+import warnings
 from collections.abc import Callable, Sequence
 from concurrent import futures
 from typing import Any
 
-from msoaxon import _fast
+from msoaxon import _common, _fast
+
+# the warnings msoaxon issues, which a pool worker may issue in the parent's
+# place
+_OURS = (_common.UnstableRestWarning, _fast.DriftWarning)
 
 # every module whose functions run in pool workers
 _PRELOAD = [
@@ -48,28 +53,56 @@ def pool_context(
     return ctx
 
 
+def warning_filters() -> list[tuple[Any, ...]]:
+    """Returns the warning filters that can match msoaxon's own warnings.
+
+    Those whose category is a base of UnstableRestWarning or
+    DriftWarning, in order. Only these go to pool workers: a filter for
+    a category a script defines could not be unpickled there.
+
+    Returns:
+        Entries of warnings.filters.
+    """
+    return [
+        f for f in warnings.filters if any(issubclass(c, f[2]) for c in _OURS)
+    ]
+
+
 def worker_init(
     env_mode: str | None,
     warned: tuple[bool, bool],
     stop_when_settled: bool,
+    filters: Sequence[tuple[Any, ...]] = (),
 ) -> None:
     """Gives a new pool worker this process's module state.
 
-    The MSOAXON_MODE and DriftWarning state (_fast.inherit) and
+    The MSOAXON_MODE and DriftWarning state (_fast.inherit),
     _dispatch.STOP_WHEN_SETTLED, which scripts/benchmark_search.py
-    toggles: a forkserver or spawned worker would otherwise keep the
-    import defaults.
+    toggles, and the warning filters for msoaxon's warnings, so that
+    warnings.simplefilter("ignore", msoaxon.UnstableRestWarning) also
+    silences runs in workers: a forkserver or spawned worker would
+    otherwise keep the import defaults.
 
     Args:
         env_mode: The parent's MSOAXON_MODE (None if unset).
         warned: Whether the parent issued the fast and the native
             DriftWarning (_fast.parent_state()).
         stop_when_settled: The parent's _dispatch.STOP_WHEN_SETTLED.
+        filters: The parent's warning_filters(), which go in front of
+            the worker's own.
     """
     from msoaxon import _dispatch  # noqa: PLC0415  (imports _parallel)
 
     _fast.inherit(env_mode, warned)
     _dispatch.STOP_WHEN_SETTLED = stop_when_settled
+    for action, message, category, module, lineno in reversed(filters):
+        warnings.filterwarnings(
+            action,
+            message.pattern if message else "",
+            category,
+            module.pattern if module else "",
+            lineno,
+        )
 
 
 def process_pool(
@@ -78,7 +111,8 @@ def process_pool(
     """Returns a ProcessPoolExecutor using pool_context().
 
     Use this for every worker pool. Workers adopt this process's
-    MSOAXON_MODE and DriftWarning state and its STOP_WHEN_SETTLED
+    MSOAXON_MODE and DriftWarning state, its STOP_WHEN_SETTLED and its
+    filters for msoaxon's warnings, as they are when the pool is made
     (worker_init): a forkserver worker would otherwise see the state of
     the server's start.
 
@@ -94,7 +128,11 @@ def process_pool(
         max_workers=max_workers,
         mp_context=pool_context(),
         initializer=worker_init,
-        initargs=(*_fast.parent_state(), _dispatch.STOP_WHEN_SETTLED),
+        initargs=(
+            *_fast.parent_state(),
+            _dispatch.STOP_WHEN_SETTLED,
+            warning_filters(),
+        ),
     )
 
 

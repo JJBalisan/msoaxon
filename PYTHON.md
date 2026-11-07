@@ -451,9 +451,11 @@ round: exact and native give 199.05 and 199.07 µs for the 3% window, 167.38 and
 167.24 for Goldwyn's (167.2 at rtol 1e-10) and 215.26 and 215.53 for the Myoga
 EPSG at the 50% criterion. Goldwyn's rheobase is 2069.6 and 2069.4 pA, a sine
 `BinarySearch.m` point two search steps apart is 11559.4 and 11563.1 pA, and the
-passive-step peak is 4.867 and 4.869 MΩ. The tighter tolerance also corrected
-the passive-step `tau`, 0.1137 ms at 1e-6 and 0.1197 at 1e-8 and 1e-10 in both
-modes, on a grid of 20001 points (0.1133 and 0.1187 on `passive_step`'s default).
+passive-step peak (`passive_step`'s default −2 pA step) is 4.8690 and 4.8711 MΩ;
+both give 4.8697 at rtol 1e-10, so only its first three digits are settled. The
+tighter tolerance also corrected the passive-step `tau`, in both modes: on a
+grid of 20001 points it is 0.1137 ms at 1e-6 and 0.1197 at 1e-8 and 1e-10, and on
+`passive_step`'s default grid 0.1135, 0.1187 and 0.1189.
 
 The golden tolerance holds for the golden runs, not for every input. In a random sweep of
 stimuli, nodes and knobs, 12 of 392 runs from a stable rest went past it at a
@@ -465,14 +467,20 @@ An unstable rest is where the two modes part. With `active-full`, only node 45
 has a positive leading eigenvalue at −68 mV (0.08 /ms). More nodes join as the
 rest rises: from node 17, with gaps, at −65 mV, from node 7 at −62 mV and from
 node 6 at −60 and −58 mV (1.7 /ms at node 6, 38 at node 13, 57 at node 45). Nodes
-3 and 5 stay stable at all of these and at −50 mV. Exact mode starts exactly on that fixed
+3 and 5 stay stable at all of these and at −50 mV; node 4 does not, at −55 mV
+(1.4 /ms) and −50 mV (3.9 /ms). Stable rests lead with a slow mode at −0.0028 to
+−0.0033 /ms, and the least unstable rest found, node 32 at −65 mV, at +0.0088 /ms.
+Exact mode starts exactly on that fixed
 point and can hold it, and native falls off it, sometimes before any input
 arrives: with no input at node 13 at −58 mV, exact stays at −58 mV and native is
 at −71.7 mV by 15 ms, and a 100 nS EPSG at node 9 at −50 mV peaks at 45.1 mV in
 exact mode and never rises in native. Neither is a resting cell's response, so
 `two_cpt` issues `UnstableRestWarning` in every mode, as `multi.membrane` does
 for a rest it rebalances. The check is a Jacobian by central differences, cached
-by the parameters' values.
+by the parameters' values. Searches that run in a worker pool warn in the
+workers; `process_pool` hands them the filters for msoaxon's warnings that are
+set when the pool is made, so `warnings.simplefilter("ignore",
+msoaxon.UnstableRestWarning)` before it silences them too.
 
 Speed of the 20 searches of `scripts/benchmark_search.py` (one pass at rel_tol
 1e-4, the reference not recomputed; Apple M1 Max, Python 3.13, with other work

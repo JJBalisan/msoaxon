@@ -36,13 +36,15 @@ RTOL = 1e-8
 ATOL = 1e-8
 MAX_STEP = 0.1  # [ms]
 
-# _warn_if_unstable's verdicts (None or the warning's message), by the
-# parameters' values, oldest dropped first
-_STABILITY: dict[tuple[object, ...], str | None] = {}
+# _warn_if_unstable's leading eigenvalues [1/ms], by the parameters' values,
+# oldest dropped first. The warning's text is made per run, since two nodes
+# can share parameter values.
+_STABILITY: dict[tuple[object, ...], float] = {}
 _STABILITY_SIZE = 64
-# A leading eigenvalue above this counts as unstable [1/ms]. Frozen gates give
-# eigenvalues of 0, which central differences can leave just above it. The rests
-# measured so far are at -0.003 or below, or at +0.08 or above.
+# A leading eigenvalue above this counts as unstable [1/ms]. Stable rests lead
+# with a slow mode at -0.0028 to -0.0033 (active-full: every stable node at
+# -65 mV, and nodes 3 and 5 from -68 to -50 mV); the least unstable rest
+# measured is +0.0088 (active-full, node 32, -65 mV).
 _UNSTABLE_ABOVE = 1e-6
 
 
@@ -751,10 +753,8 @@ def initial_state(P: TwoCptParams) -> np.ndarray:
     )
 
 
-def _instability(
-    P: TwoCptParams, s: _common.Stimulus, node: int, v0: float
-) -> str | None:
-    """Returns UnstableRestWarning's message for P, or None if stable.
+def _leading_eigenvalue(P: TwoCptParams, s: _common.Stimulus) -> float:
+    """Returns the largest real part of the rest's eigenvalues [1/ms].
 
     Central differences of the quiet right-hand side at the starting
     state, steps of 1e-6 relative (at least 1e-6 absolute), as
@@ -763,8 +763,6 @@ def _instability(
     Args:
         P: The parameters.
         s: The stimulus settings, which a quiet right-hand side ignores.
-        node: The node the axon compartment stands for.
-        v0: The resting potential [mV].
     """
     x0 = initial_state(P)
     J = np.empty((x0.size, x0.size))
@@ -777,15 +775,7 @@ def _instability(
             _rhs(0.0, up, P, "none", s), _rhs(0.0, down, P, "none", s)
         )
         J[:, j] = diff / (2 * h)
-    lead = np.linalg.eigvals(J).real.max()
-    if lead <= _UNSTABLE_ABOVE:
-        return None
-    return (
-        f"two_cpt's rest at {v0} mV, node {node}, is unstable: the leading "
-        f"eigenvalue is {lead:+.3f} /ms. A run leaves it by rounding error "
-        f"alone or stays on it, so exact and native results can differ by "
-        f"tens of mV, and neither is a resting cell's response."
-    )
+    return float(np.linalg.eigvals(J).real.max())
 
 
 def _warn_if_unstable(
@@ -806,10 +796,18 @@ def _warn_if_unstable(
     if key not in _STABILITY:
         if len(_STABILITY) >= _STABILITY_SIZE:
             _STABILITY.pop(next(iter(_STABILITY)))
-        _STABILITY[key] = _instability(P, s, node, v0)
-    message = _STABILITY[key]
-    if message is not None:
-        warnings.warn(message, _common.UnstableRestWarning, stacklevel=3)
+        _STABILITY[key] = _leading_eigenvalue(P, s)
+    lead = _STABILITY[key]
+    if lead > _UNSTABLE_ABOVE:
+        warnings.warn(
+            f"two_cpt's rest at {v0} mV, node {node}, is unstable: the "
+            f"leading eigenvalue is {lead:+.3f} /ms. A run leaves it by "
+            f"rounding error alone or stays on it, so exact and native "
+            f"results can differ by tens of mV, and neither is a resting "
+            f"cell's response.",
+            _common.UnstableRestWarning,
+            stacklevel=3,
+        )
 
 
 def two_cpt(

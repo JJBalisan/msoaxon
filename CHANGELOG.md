@@ -6,6 +6,33 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+Fixes to 1.12.0's `UnstableRestWarning` for `two_cpt`. No published number
+moves.
+
+### Fixed
+
+- Pool workers adopt the parent's warning filters for msoaxon's warnings
+  (`_parallel.warning_filters`), so `warnings.simplefilter("ignore",
+  msoaxon.UnstableRestWarning)` also silences a search's runs in a
+  `process_pool`, where `two_cpt` warns. Only `PYTHONWARNINGS` did before.
+  The same goes for `DriftWarning`.
+- The warning names the run's own node and rest. The cache keeps the leading
+  eigenvalue, not the message, so two nodes given the same parameters by
+  explicit knobs no longer share one node's text.
+- `two.py`'s comment on the threshold said frozen gates give zero
+  eigenvalues; none do. It now gives the measured gap: stable rests lead at
+  −0.0028 to −0.0033 /ms, the least unstable found at +0.0088 /ms (node 32,
+  −65 mV). The tests now pin the eigenvalue, the warning's caller, its node,
+  that rest and the cache key.
+- `PYTHON.md`: the passive-step peak is 4.8690 and 4.8711 MΩ (exact and native,
+  at the default −2 pA step), not 4.867 and 4.869, and settled to three digits;
+  the 1e-6 `tau` on the default grid is 0.1135 ms, not 0.1133. 1.12.0's entry
+  below says `tau` keeps its value at 1e-10: that holds on the 20001-point grid
+  only (0.1187 at 1e-8, 0.1189 at 1e-10 on the default). Node 4 is unstable at
+  −55 and −50 mV, now listed.
+
 ## 1.12.0 (7 Nov 2026)
 
 `two_cpt` now runs at the 45-compartment model's solver tolerance and, with the
