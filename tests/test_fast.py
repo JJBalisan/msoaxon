@@ -1306,6 +1306,82 @@ def test_two_sine_without_a_frequency_raises_in_every_mode():
                 two.two_cpt(*args, mode=mode)
 
 
+class FakeTwoExt:
+    """Stands in for msoaxon_fast, keeping what _build_two hands it."""
+
+    def TwoCptRhs(self, **kw):  # noqa: N802
+        self.kw = kw
+        return "rhs"
+
+
+@pytest.mark.parametrize("stim_name", sorted(TWO_STIMULI))
+def test_two_build_sends_the_fields_of_its_stimulus(stim_name, monkeypatch):
+    # what Rust does with them: test_rust_two_rhs_matches_numpy, which needs
+    # the extension; this runs in the jobs without it too
+    (P, stim, s), _ = two_setup(stim_name, "default", 3)
+    ext = FakeTwoExt()
+    monkeypatch.setattr(_fast, "_ext", ext)
+    assert _fast._build_two(stim, s, P) == "rhs"
+    kw = ext.kw
+    params = kw.pop("params")
+    assert params == dataclasses.asdict(P)
+    assert all(type(v) is float for v in params.values())
+    assert kw.pop("gating") == _fast._gating()
+    rise, decay = s.epsg_tau
+    want = {
+        "stim_type": stim,
+        "start": s.start,
+        "stop": s.stop,
+        "amp": s.I,
+        "t_end": s.t_end,
+        "ramp_rise": _solve.RAMP_RISE,
+        "epsg": (s.inv_peak, decay, rise),
+    }
+    for name in ("slope", "t_top", "two_pi_f"):
+        if getattr(s, name) is not None:
+            want[name] = getattr(s, name)
+    if stim in ("Synaptic", "SynapticPair"):
+        np.testing.assert_array_equal(kw.pop("t_syn"), s.t_syn)
+        np.testing.assert_array_equal(kw.pop("g_syn"), s.g_syn)
+        want.update(vsyn=s.VsynE, diff=s.diff)
+    if stim == "Events":
+        for name, a in s.events.items():
+            got = kw.pop(f"ev_{name}")
+            np.testing.assert_array_equal(got, a)
+            assert got.dtype == (np.int64 if name == "k" else np.float64)
+    assert kw == want
+
+
+def test_two_build_refuses_a_sine_without_a_frequency(monkeypatch):
+    syn = synaptic.SynParams(t_end=20.0, f=None)
+    s = _common.stimulus("sine", 5, 7.5, 3000, 20.0, syn)
+    monkeypatch.setattr(_fast, "_ext", FakeTwoExt())
+    with pytest.raises(TypeError, match="SynParams.f"):
+        _fast._build_two("sine", s, two.get_params(-68.0, 3, 1, "active-full"))
+
+
+@pytest.mark.parametrize(
+    ("build", "flag", "warner"),
+    [
+        ("build_two", "warned", "_warn_drift"),
+        ("build_two_native", "warned_native", "_warn_native"),
+    ],
+)
+def test_two_builders_warn_once(build, flag, warner, monkeypatch):
+    (P, stim, s), _ = two_setup("EPSG", "default", 1)
+    calls = []
+    monkeypatch.setattr(_fast, "_ext", FakeTwoExt())
+    monkeypatch.setattr(_fast, warner, lambda: calls.append(warner))
+    monkeypatch.setitem(_fast._STATE, flag, False)
+    rhs = [getattr(_fast, build)(stim, s, P) for _ in range(2)]
+    assert calls == [warner]
+    assert _fast._STATE[flag] is True
+    if build == "build_two":
+        assert rhs == ["rhs", "rhs"]
+    else:
+        assert all(type(r) is _fast.Native and r._rhs == "rhs" for r in rhs)
+
+
 @needs_ext
 def test_two_quiet_cache_key_has_the_mode(
     fresh_quiet_cache, quiet_native, monkeypatch

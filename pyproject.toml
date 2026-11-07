@@ -44,4 +44,4 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 95  # line + branch; 96.1 measured without the Rust extension
+fail_under = 95  # line + branch; 95.75 on Python 3.14 without the extension
