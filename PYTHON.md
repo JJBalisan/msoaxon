@@ -314,9 +314,10 @@ expression (`m**4` is `powf(4.0)`, not `powi`; `np.interp`'s fused multiply-add
 on arm64 is reproduced). On darwin-arm64, where numpy and Rust call the same
 libm, it is bit-identical to `multi._rhs`, and so are whole runs, thresholds and
 windows. Elsewhere it agrees to the golden tolerance ("Agreement contract").
-The first fast run in each process checks the port against `multi._rhs` on 24
-fixed states (about 5 ms) and issues a `msoaxon.DriftWarning` saying whether it
-was bit-identical on this machine.
+The first fast run in each process checks both ports, `multi._rhs` against
+`MultiRhs` and `two._rhs` against `TwoCptRhs`, on 24 fixed states each (about
+10 ms; `_fast.self_check`) and issues a `msoaxon.DriftWarning` saying, per
+port, whether it was bit-identical on this machine.
 Silence it with
 
 ```python
@@ -340,7 +341,8 @@ soma driving force for input into the axon is kept in the equations. Since
 `x ** 2` is libm `pow` (numpy's arrays use `x * x`; they differ in the last bit
 now and then), and `i[soma].sum()` is numpy's pairwise sum. Whole fast runs are
 bit-identical to `"exact"` on darwin-arm64 here too. The self-check behind the
-first DriftWarning still samples the 45-compartment port only.
+first DriftWarning samples this port as well as the 45-compartment one (three
+configurations each), and the warning names the port that drifted (#168).
 
 **Speed** (Apple M1 Max, Python 3.12, best of 3; the machine was busy, so read
 the ratios rather than the seconds):

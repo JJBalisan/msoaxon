@@ -6,6 +6,23 @@ and a change that moves them beyond the golden-trace tolerance is a new
 minor version at least. The `msoaxon-fast` crate in `rust/` carries the
 same version as the package, bumped in the same release PR.
 
+## Unreleased
+
+The fast-mode self-check covers the two-compartment port too. No published
+number moves.
+
+### Fixed
+
+- `_fast.self_check` samples `two._rhs` against `msoaxon_fast.TwoCptRhs` on
+  three configurations (an EPSG pair into node 3's soma; a step into node 5's
+  axon on Goldwyn et al 2019's calibration; two "Events" at node 4 with KLT
+  replaced by a leak), 24 states by default, beside the 45-compartment port's
+  24, and takes `port="multi"` or `"two"` for one port alone. The first-run
+  `DriftWarning` reports each port, so a `two_cpt` run's warning now says
+  whether the code that run uses was bit-identical here, where it used to
+  report on the 45-compartment port alone (#168). The `pytest-fast` jobs
+  print the self-check per port.
+
 ## 1.12.1 (7 Nov 2026)
 
 Fixes to 1.12.0's `UnstableRestWarning` for `two_cpt`. No published number

@@ -154,8 +154,8 @@ jobs:
         working-directory: prototype/diffsol-real
       - run: uv sync --locked --extra fast
       # bit-identical to the numpy reference on this runner? The self-check
-      # (differing states, states compared, largest relative difference),
-      # then one threshold search in both modes
+      # per port (differing states, states compared, largest relative
+      # difference), then one threshold search in both modes
       - name: Self-check
         shell: bash  # Windows defaults to pwsh
         run: |
@@ -166,7 +166,8 @@ jobs:
             from msoaxon import _fast, coincidence
             assert _fast.available()
             th = {m: coincidence.threshold("multi", 0.1, model_kw={"mode": m}) for m in _fast.MODES}
-            print(f"self_check {_fast.self_check(64)}; threshold(delay 0.1) {th}")
+            sc = {p: _fast.self_check(64, p) for p in _fast.PORTS}
+            print(f"self_check {sc}; threshold(delay 0.1) {th}")
       - run: uv run pytest -q ${{ matrix.pytest-args }}
         env:
           MPLBACKEND: Agg
