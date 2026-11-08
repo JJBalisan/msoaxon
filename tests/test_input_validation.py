@@ -8,6 +8,7 @@ before any simulation.
 """
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -137,6 +138,94 @@ def test_two_cpt_rejects_an_r1_that_is_not_positive(no_simulation, bad):
 def test_get_params_rejects_an_r1_that_is_not_positive(bad):
     with pytest.raises(ValueError, match=r"r1 must be > 0"):
         two.get_params(-68.0, 3, 1, "active-full", r1=bad)
+
+
+# --- two_cpt: the calibration and the conductances must be finite (#170) ---
+#
+# Each used to run on past get_params and fail in the 1.12.0 rest check with
+# numpy's LinAlgError ("Array must not contain infs or NaNs"), after
+# RuntimeWarnings from two._rhs; none names the argument.
+
+INF = [float("inf"), float("-inf")]
+
+
+@pytest.mark.parametrize("bad", BAD)
+def test_two_cpt_rejects_a_tau_est_that_is_not_positive(no_simulation, bad):
+    with pytest.raises(ValueError, match=r"tau_est must be > 0"):
+        two.two_cpt(*EPSG, 6.0, -68.0, 1, mode="exact", tau_est=bad)
+
+
+@pytest.mark.parametrize("bad", BAD)
+def test_get_params_rejects_a_tau_est_that_is_not_positive(bad):
+    with pytest.raises(ValueError, match=r"tau_est must be > 0"):
+        two.get_params(-68.0, 3, 1, "active-full", tau_est=bad)
+
+
+# the keyword, the value, and the message's bound: a positive infinity
+# clears "> 0" and ">= 0", so it is reported as not finite; a negative
+# one fails the bound first, as 0 and NaN do
+NOT_FINITE = [
+    ("v0", float("inf"), "finite"),
+    ("v0", float("-inf"), "finite"),
+    ("v0", float("nan"), "finite"),
+    ("r1", float("inf"), "finite"),
+    ("r1", float("-inf"), "> 0"),
+    ("tau_est", float("inf"), "finite"),
+    ("tau_est", float("-inf"), "> 0"),
+    ("gC", float("inf"), "finite"),
+    ("gC", float("-inf"), "> 0"),
+    ("gC", float("nan"), "> 0"),
+    ("area_ratio", float("inf"), "finite"),
+    ("area_ratio", float("nan"), "> 0"),
+    ("gNa2", float("inf"), "finite"),
+    ("gNa2", float("-inf"), ">= 0"),
+    ("gNa2", float("nan"), ">= 0"),
+    ("gKHT", float("inf"), "finite"),
+    ("gKHT", float("-inf"), ">= 0"),
+    ("gKHT", float("nan"), ">= 0"),
+]
+
+
+@pytest.mark.parametrize(("name", "bad", "bound"), NOT_FINITE)
+def test_get_params_rejects_a_value_that_is_not_finite(name, bad, bound):
+    kw = {"v0": -68.0, name: bad}
+    with pytest.raises(ValueError, match=rf"{name} must be {bound}"):
+        two.get_params(kw.pop("v0"), 3, 1, "active-full", **kw)
+
+
+@pytest.mark.parametrize(("name", "bad", "bound"), NOT_FINITE)
+def test_two_cpt_rejects_a_value_that_is_not_finite(
+    no_simulation, name, bad, bound
+):
+    kw = {"v0": -68.0, name: bad}
+    with pytest.raises(ValueError, match=rf"{name} must be {bound}"):
+        two.two_cpt(*EPSG, 6.0, kw.pop("v0"), 1, mode="exact", **kw)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [{"tau_est": 0.0}, {"tau_est": float("nan")}, {"gNa2": float("inf")}],
+    ids=["tau_est=0", "tau_est=nan", "gNa2=inf"],
+)
+def test_two_cpt_names_the_argument_before_any_arithmetic(no_simulation, kw):
+    # issue #170's three cases: the ValueError, and no RuntimeWarning (a
+    # divide by zero or an invalid value in two._rhs) ahead of it
+    name = next(iter(kw))
+    with (
+        warnings.catch_warnings(),
+        pytest.raises(ValueError, match=rf"^{name} must be"),
+    ):
+        warnings.simplefilter("error")
+        args = ("EPSG", 5, 10, 1.0, 3, "active-full", 6, -68.0, 1)
+        two.two_cpt(*args, mode="exact", **kw)
+
+
+def test_two_cpt_still_takes_goldwyns_calibration(no_simulation):
+    # the checks accept every calibration in use: no_simulation fails the
+    # test at the solver, so this gets exactly that far
+    kw = dict(two.GOLDWYN_2019)
+    with pytest.raises(AssertionError, match="a model run happened"):
+        two.two_cpt(*EPSG, 6.0, kw.pop("v0"), 1, mode="exact", **kw)
 
 
 # --- SynParams: EPSG kinetics ---

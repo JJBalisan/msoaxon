@@ -8,8 +8,9 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
-The fast-mode self-check covers the two-compartment port too, and
-`PYTHON.md`'s documented numbers are corrected (#168, #169, #171). No
+The fast-mode self-check covers the two-compartment port too, `PYTHON.md`'s
+documented numbers are corrected, and `two_cpt` rejects a calibration or
+conductance it cannot run with before it runs (#168, #169, #170, #171). No
 published number moves and no computed result moves.
 
 ### Fixed
@@ -48,6 +49,14 @@ published number moves and no computed result moves.
   "12–14%", unnamed) and the 100 Hz sine threshold is 2.8× and 3.0× its
   minimum (was "2.8×"); `scripts/resonance.py` prints each resonant arm's
   dip. Both were measured in native mode, which the text says.
+- `two_cpt` and `two.get_params` raise `ValueError` naming the argument for
+  a `v0`, `r1`, `tau_est`, `gC`, `area_ratio`, `gNa2` or `gKHT` that is not
+  finite, and for an `r1` or `tau_est` that is not > 0 (every capacitance and
+  conductance is a multiple of them): `tau_est must be > 0, got 0.0`, as
+  `multi.membrane` reports `axon_rest`. `tau_est=0`, `tau_est=nan` and
+  `gNa2=inf` used to run on to numpy's `LinAlgError` in 1.12.0's rest check,
+  after `RuntimeWarning`s from `two._rhs`, with no argument named (#170).
+
 
 ## 1.12.1 (7 Nov 2026)
 

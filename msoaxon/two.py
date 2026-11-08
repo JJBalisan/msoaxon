@@ -6,6 +6,7 @@ Currents are in pA, conductances in nS, capacitances in pF, time in ms.
 """
 
 import dataclasses
+import math
 import warnings
 
 import numpy as np
@@ -137,6 +138,30 @@ def _fraction(name: str, x: float) -> None:
         raise ValueError(f"{name} must be in [0, 1], got {x}")
 
 
+def _finite(name: str, x: float, low: str | None = None) -> None:
+    """Raises ValueError unless x is finite, and clears `low` if given.
+
+    The bound is checked first, so 0, a negative value and NaN are
+    reported against it, as _common.check_times reports t_end, and only
+    an infinity as not finite. Without these checks a non-finite value,
+    or a zero where get_params divides by the value, ran on to a
+    LinAlgError in the rest check, after RuntimeWarnings from the
+    right-hand side, neither of which named the argument (#170).
+
+    Args:
+        name: The argument's name, for the message.
+        x: Its value.
+        low: None for any finite value, "> 0" for a value that must be
+            positive, ">= 0" for a conductance that may be switched off.
+    """
+    if low == "> 0" and not x > 0.0:
+        raise ValueError(f"{name} must be > 0, got {x!r}")
+    if low == ">= 0" and not x >= 0.0:
+        raise ValueError(f"{name} must be >= 0, got {x!r}")
+    if not math.isfinite(x):
+        raise ValueError(f"{name} must be finite, got {x!r}")
+
+
 def _check_knobs(
     gC: float | None,
     couple12: float | None,
@@ -151,19 +176,20 @@ def _check_knobs(
     since only the active channels share the resting conductance.
 
     Raises:
-        ValueError: For a non-positive gC or area_ratio, a coupling
-            constant outside (0, 1), a negative gNa2 or a Na V-half
-            that is not finite; NaN fails every check.
+        ValueError: For a gC or area_ratio that is not finite and
+            positive, a coupling constant outside (0, 1), a gNa2 that is
+            negative or not finite, or a Na V-half that is not finite;
+            NaN fails every check.
     """
-    if gC is not None and not gC > 0.0:
-        raise ValueError(f"gC must be > 0, got {gC}")
-    if area_ratio is not None and not area_ratio > 0.0:
-        raise ValueError(f"area_ratio must be > 0, got {area_ratio}")
+    if gC is not None:
+        _finite("gC", gC, "> 0")
+    if area_ratio is not None:
+        _finite("area_ratio", area_ratio, "> 0")
     for name, c in (("couple12", couple12), ("couple21", couple21)):
         if c is not None and not 0.0 < c < 1.0:
             raise ValueError(f"{name} must be in (0, 1), got {c}")
-    if gNa2 is not None and not gNa2 >= 0.0:
-        raise ValueError(f"gNa2 must be >= 0, got {gNa2}")
+    if gNa2 is not None:
+        _finite("gNa2", gNa2, ">= 0")
     for name, v in zip(
         ("soma_na_vhalf", "axon_na_vhalf"), na_vhalf, strict=True
     ):
@@ -304,10 +330,10 @@ def _somatic_kht(
         The conductance [nS]; 0 for a model type without KHT.
 
     Raises:
-        ValueError: If gKHT is negative or NaN.
+        ValueError: If gKHT is negative, NaN or infinite.
     """
-    if gKHT is not None and not gKHT >= 0.0:
-        raise ValueError(f"gKHT must be >= 0, got {gKHT}")
+    if gKHT is not None:
+        _finite("gKHT", gKHT, ">= 0")
     if model_type not in ("active-KHT", "active-full"):
         return 0.0
     return float(C.KHT_FRAC[0] * gTot1 / C.pinf(Vr)) if gKHT is None else gKHT
@@ -415,10 +441,10 @@ def get_params(
     Raises:
         ValueError: For a value outside its range (see two_cpt), for
             fractions that leave a compartment no leak conductance,
-            for an r1 that is not > 0, for gC together with a
-            non-default r1, for klt_to_leak not None, "chord" or
-            "slope", or "slope" at a v0 where KLT has no positive slope
-            conductance.
+            for a v0 that is not finite, an r1 or tau_est that is not
+            finite and > 0, for gC together with a non-default r1, for
+            klt_to_leak not None, "chord" or "slope", or "slope" at a
+            v0 where KLT has no positive slope conductance.
     """
     if klt_to_leak not in (None, "chord", "slope"):
         raise ValueError(
@@ -432,8 +458,11 @@ def get_params(
         gNa2,
         (soma_na_vhalf, axon_na_vhalf),
     )
-    if not r1 > 0:
-        raise ValueError(f"r1 must be > 0, got {r1!r}")
+    # every conductance and capacitance below is a multiple of 1 / r1 and
+    # tau_est, so a zero or an infinity in either leaves nothing to run
+    _finite("v0", v0)
+    _finite("r1", r1, "> 0")
+    _finite("tau_est", tau_est, "> 0")
     if gC is not None and r1 != R1_DEFAULT:
         raise ValueError(
             "pass gC or r1, not both: gC fixes the input resistance"
@@ -949,9 +978,10 @@ def two_cpt(
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
             ramp with stop <= start, a free-coupling argument outside
-            its range, an r1, t_end or max_step that is not > 0,
-            klt_to_leak not None, "chord" or "slope", or an unknown
-            mode.
+            its range, an r1, tau_est, t_end or max_step that is not >
+            0, a v0, r1, tau_est, gC, area_ratio, gNa2 or gKHT that is
+            not finite, klt_to_leak not None, "chord" or "slope", or an
+            unknown mode.
 
     Warns:
         UnstableRestWarning: If the starting state is unstable, where
