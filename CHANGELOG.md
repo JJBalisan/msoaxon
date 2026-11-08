@@ -8,8 +8,9 @@ same version as the package, bumped in the same release PR.
 
 ## Unreleased
 
-The fast-mode self-check covers the two-compartment port too. No published
-number moves.
+The fast-mode self-check covers the two-compartment port too, and
+`PYTHON.md`'s documented numbers are corrected (#168, #169, #171). No
+published number moves and no computed result moves.
 
 ### Fixed
 
@@ -22,6 +23,31 @@ number moves.
   whether the code that run uses was bit-identical here, where it used to
   report on the 45-compartment port alone (#168). The `pytest-fast` jobs
   print the self-check per port.
+- `PYTHON.md`, criterion table: the 45-compartment row's 3% window is 201.2 →
+  199.8 µs and its rheobase 3784 → 3850 pA (+1.7%), not 201.1 → 199.7 and
+  3785 → 3852 (+1.8%), remeasured in exact mode; the other cells and the Myoga
+  and 0.5% window bullets hold. The "about 7% more simulations at 50%" bullet
+  now says what it counts: the table's coincident threshold, 3% window and
+  rheobase searches through `_dispatch.run_model`, 95 → 106 simulations over
+  the three models (12% more), per model and per search; `tests/test_criterion.py`
+  pins the two-compartment counts.
+- `PYTHON.md`, Na availability: the 45-compartment −58 mV rows are rerun with
+  #128's soma-only rebalance (`scripts/na_availability.py --mode exact`):
+  rheobase 5602 and 6835 pA (were 5289 and 6438), 3% windows 132 and 127 µs
+  (137 and 133), a steady rest so Rin is measurable (0.57 and 0.56 MΩ), and
+  the somatic peaks move by up to 1.2 mV. The bullets quoting them follow
+  (rheobase +48%, not +39%). The other twelve rows are unchanged.
+- `PYTHON.md`, three claims that could not be reproduced as written (#171)
+  now name what they measure: the noisy-trial check of the coincidence window
+  is `TwoCpt.m` at the 3% margin, where `probability_trials`' default noise
+  (3% amplitude CV, 15 µs jitter) gives an 80% peak and a width 11% wider
+  than `window()`'s (was "near 85%", "about 10%");
+  `scripts/coincidence_window.py` now runs that second noisy check too and
+  saves it as `noisy_check_default_noise`. The EPSG-train minimum is 13.9%
+  (45-compartment) and 12.3% (`TwoCpt.m`) below the 100 Hz threshold (was
+  "12–14%", unnamed) and the 100 Hz sine threshold is 2.8× and 3.0× its
+  minimum (was "2.8×"); `scripts/resonance.py` prints each resonant arm's
+  dip. Both were measured in native mode, which the text says.
 
 ## 1.12.1 (7 Nov 2026)
 

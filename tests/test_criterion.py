@@ -244,3 +244,64 @@ def test_relative_criterion_on_the_45_compartment_model():
         "multi", 0.0, rel_tol=1e-3, criterion=coincidence.Relative(0.5)
     )
     assert 1.005 < th50 / th10 < 1.03  # report: +1.67%
+
+
+# PYTHON.md "Spike criterion": what the searches of the criterion table cost,
+# as simulations through _dispatch.run_model (the count
+# scripts/benchmark_search.py reports), in exact mode, at the 10 mV default
+# and at 50% of the spike height: (coincident threshold, 3% window, rheobase),
+# and the spike height's own runs. The 45-compartment counts (9; 10, 14, 10
+# and 12, 11, 12) are documented only: they take minutes here.
+RUNS = {
+    "two": {"height": 8, 10.0: (9, 11, 10), 0.5: (14, 12, 13)},
+    "goldwyn": {"height": 12, 10.0: (12, 11, 8), 0.5: (12, 12, 8)},
+}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("config", sorted(RUNS))
+def test_search_run_counts_at_both_criteria(monkeypatch, config):
+    v0 = -68.0 if config == "two" else two.GOLDWYN_2019["v0"]
+    kw = {"mode": "exact", **(GOLDWYN_KW if config == "goldwyn" else {})}
+    counts = []
+    run_model = _dispatch.run_model
+
+    def counted(*args, **kwargs):
+        counts[-1] += 1
+        return run_model(*args, **kwargs)
+
+    monkeypatch.setattr(_dispatch, "run_model", counted)
+
+    def count(fn, *args, **kwargs):
+        counts.append(0)
+        value = fn(*args, **kwargs)
+        return value, counts[-1]
+
+    _, n_height = count(coincidence.spike_height, "two", v0=v0, model_kw=kw)
+    assert abs(n_height - RUNS[config]["height"]) <= 1
+    for level, crit in ((10.0, 10.0), (0.5, coincidence.Relative(0.5))):
+        th, n_th = count(
+            coincidence.threshold,
+            "two",
+            0.0,
+            v0=v0,
+            model_kw=kw,
+            criterion=crit,
+        )
+        _, n_win = count(
+            coincidence.window,
+            "two",
+            0.03,
+            v0=v0,
+            model_kw=kw,
+            criterion=crit,
+            threshold0=th,
+        )
+        _, n_rb = count(
+            somatic.rheobase, "two", v0=v0, model_kw=kw, criterion=crit
+        )
+        expected = RUNS[config][level]
+        # a last-bit difference between platforms can move one probe
+        for n, e in zip((n_th, n_win, n_rb), expected, strict=True):
+            assert abs(n - e) <= 1, (level, (n_th, n_win, n_rb), expected)
+        assert abs(n_th + n_win + n_rb - sum(expected)) <= 2

@@ -120,7 +120,6 @@ def test_coincidence_window_script(tmp_path):
     assert_replots(
         "coincidence_window.py", tmp_path / "coincidence_window.json"
     )
-    assert res["noisy_check"]["n_trials"] == 8
     for ext in ("png", "pdf"):
         assert (tmp_path / f"coincidence_window.{ext}").stat().st_size > 0
 
@@ -133,10 +132,17 @@ def test_coincidence_window_script(tmp_path):
         assert (
             r["margin_0.005"] < r["margin_0.03"]
         )  # larger inputs stay above threshold longer
-    noisy = res["noisy_check"]
-    assert 0 < noisy["peak_probability"] <= 1
-    # nan when the few quick trials never fall below half: must still be written
-    assert isinstance(noisy["half_width_us"], float)
+    for key, (amp_cv, jitter) in (
+        ("noisy_check", (0.01, 0.005)),
+        ("noisy_check_default_noise", (0.03, 0.015)),
+    ):
+        noisy = res[key]
+        assert (noisy["amp_cv"], noisy["jitter_ms"]) == (amp_cv, jitter)
+        assert noisy["n_trials"] == 8
+        assert 0 < noisy["peak_probability"] <= 1
+        # nan when the few quick trials never fall below half: must still be
+        # written
+        assert isinstance(noisy["half_width_us"], float)
 
 
 def test_somatic_spike_script(tmp_path):
