@@ -79,15 +79,20 @@ def _clean(x: Any) -> Any:
     return x
 
 
-def _best(d: dict[str, Any]) -> str:
+def _best(d: dict[str, Any], dip: bool = False) -> str:
     """Names a threshold curve's resonance: its frequency, or that it has none.
 
     A minimum at the end of the swept range, or one less than
     resonance.MIN_RATIO below the lowest frequency's threshold, is no
     resonance; the text then gives the dip and where the minimum sat.
+    With dip, a resonance's own dip (the threshold at the lowest
+    frequency over the minimum) follows its frequency, as PYTHON.md
+    quotes it.
     """
     if d["resonant"]:
-        return f"{d['f_best']:.0f} Hz"
+        return f"{d['f_best']:.0f} Hz" + (
+            f" (dip {d['dip']:.2f})" if dip else ""
+        )
     return f"none (dip {d['dip']:.2f}, minimum at {d['f_best']:.0f} Hz)"
 
 
@@ -149,7 +154,7 @@ def summary(name: str, r: dict[str, Any]) -> str:
             if z["resonant"]
             else f"no subthreshold resonance (Q {z['q']:.2f})"
         )
-        + f"; spike {_best(s)}; EPSG train {_best(e)}"
+        + f"; spike {_best(s, dip=True)}; EPSG train {_best(e, dip=True)}"
     )
 
 

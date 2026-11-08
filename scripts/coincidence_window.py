@@ -30,6 +30,11 @@ KINETICS = {
     "model EPSG (decay 0.18 ms)": synaptic.EPSG_TAU,
     "Myoga EPSG (decay 0.3 ms)": (0.1, 0.3),
 }
+# the noisy-trial check's (amplitude CV, onset jitter [ms]) per EPSG: small
+# noise keeps the peak probability near 100%, as in Myoga's protocol;
+# probability_trials' defaults (3%, 15 us) keep it well below (PYTHON.md
+# "Coincidence window")
+NOISE = {"small": (0.01, 0.005), "default": (0.03, 0.015)}
 _goldwyn = {k: v for k, v in two.GOLDWYN_2019.items() if k != "v0"}
 CONFIGS = {
     "45-compartment": ("multi", -68.0, {}),
@@ -40,6 +45,30 @@ CONFIGS = {
         _goldwyn,
     ),
 }
+
+
+def noisy_half_width(delays: np.ndarray, prob: np.ndarray) -> float:
+    """Returns the full width at half the peak probability [us].
+
+    Args:
+        delays: The delays of the trials, from 0 up [ms].
+        prob: The spike probability at each delay.
+
+    Returns:
+        Twice the delay where the probability falls to half its peak,
+        linearly interpolated between the two delays around it; nan when
+        it never falls to half within the delays, or never rises.
+    """
+    p_half = prob.max() / 2
+    below = np.nonzero(prob < p_half)[0]
+    if len(below) == 0 or below[0] == 0:
+        return float("nan")
+    j = below[0]
+    return float(
+        2
+        * np.interp(p_half, [prob[j], prob[j - 1]], [delays[j], delays[j - 1]])
+        * 1e3
+    )
 
 
 def strip_rows(
@@ -88,6 +117,8 @@ def draw(summary: dict[str, Any]) -> Any:
         np.array(noisy["probability"]),
     )
     mc_width, trials = noisy["half_width_us"], noisy["n_trials"]
+    # the default-noise check is absent from JSONs written before it existed
+    louder = summary.get("noisy_check_default_noise")
 
     fig = plotting.figure("double", height=4.4)
     gs = fig.add_gridspec(2, 2, height_ratios=(4, 1))
@@ -135,6 +166,24 @@ def draw(summary: dict[str, Any]) -> Any:
             f"{trials} trials per delay, 95% Wilson interval)"
         ),
     )
+    if louder is not None:
+        p_loud = np.array(louder["probability"])
+        p_loud = np.concatenate([p_loud[:0:-1], p_loud])
+        lo, hi = plotting.wilson_interval(p_loud, louder["n_trials"])
+        a2.errorbar(
+            sym,
+            p_loud,
+            yerr=[p_loud - lo, hi - p_loud],
+            fmt="s--",
+            color=colours[1],
+            markerfacecolor="none",
+            capsize=2,
+            label=plotting.glyphs(
+                f"same, {louder['amp_cv']:.0%} amplitude CV and "
+                f"{louder['jitter_ms'] * 1e3:.0f} us jitter "
+                f"(FWHM {louder['half_width_us']:.0f} us)"
+            ),
+        )
     for ax in (a2, strip):
         ax.axvspan(
             -MYOGA_US / 2,
@@ -282,49 +331,47 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
         )
 
     # check window() against real noisy trials (2-cpt TwoCpt.m, model EPSG, 3%
-    # margin)
+    # margin), at two noise levels: small noise, so probability peaks near
+    # 100% as in Myoga's protocol, and probability_trials' default, which
+    # keeps the peak well below 100% (PYTHON.md "Coincidence window")
     cname, kname = list(CONFIGS)[1], list(KINETICS)[0]
     model, v0, kw = CONFIGS[cname]
     amp = (1 + 0.03) * rows[combos.index((cname, kname))][2]
     mc_delays = np.round(np.arange(0, 0.3001, 0.1 if a.quick else 0.02), 4)
-    # small noise so probability peaks near 100%, as in Myoga's protocol; 1%
-    # amplitude jitter plus 5 us onset jitter per EPSG (a noise source window()
-    # ignores)
-    prob = coincidence.probability_trials(
-        model,
-        mc_delays,
-        amp,
-        n_trials=a.trials,
-        amp_cv=0.01,
-        jitter=0.005,
-        node=a.node,
-        v0=v0,
-        epsg_tau=KINETICS[kname],
-        model_kw=kw,
-        executor=pool,
-    )
-    p_half = prob.max() / 2
-    below = np.nonzero(prob < p_half)[0]
-    if (
-        len(below) == 0 or below[0] == 0
-    ):  # never falls to half within mc_delays, or never rises
-        mc_width = np.nan
-    else:
-        j = below[0]
-        mc_width = (
-            2
-            * np.interp(
-                p_half, [prob[j], prob[j - 1]], [mc_delays[j], mc_delays[j - 1]]
-            )
-            * 1e3
-        )
     direct_us = direct[cname, kname][0.03]
-    print(
-        f"noisy-trial check ({cname}, {kname}, 3%): "
-        f"peak probability {prob.max():.2f}, "
-        f"half-width {mc_width:.0f} us vs window() {direct_us:.0f} us",
-        flush=True,
-    )
+    noisy_checks = {}
+    for key, (amp_cv, jitter) in NOISE.items():
+        prob = coincidence.probability_trials(
+            model,
+            mc_delays,
+            amp,
+            n_trials=a.trials,
+            amp_cv=amp_cv,
+            jitter=jitter,
+            node=a.node,
+            v0=v0,
+            epsg_tau=KINETICS[kname],
+            model_kw=kw,
+            executor=pool,
+        )
+        mc_width = noisy_half_width(mc_delays, prob)
+        print(
+            f"noisy-trial check ({cname}, {kname}, 3%, {amp_cv:.0%} amplitude "
+            f"CV, {jitter * 1e3:.0f} us jitter): "
+            f"peak probability {prob.max():.2f}, "
+            f"half-width {mc_width:.0f} us vs window() {direct_us:.0f} us",
+            flush=True,
+        )
+        noisy_checks[key] = {
+            "half_width_us": mc_width,
+            "window_us": direct_us,
+            "peak_probability": float(prob.max()),
+            "amp_cv": amp_cv,
+            "jitter_ms": jitter,
+            "delays_ms": mc_delays.tolist(),
+            "probability": prob.tolist(),
+            "n_trials": a.trials,
+        }
 
     summary = {
         "curve_delays_ms": delays.tolist(),
@@ -343,14 +390,8 @@ def run(a: argparse.Namespace, pool: futures.ProcessPoolExecutor) -> None:
             }
             for c, k, t0, ws in rows
         ],
-        "noisy_check": {
-            "half_width_us": mc_width,
-            "window_us": direct_us,
-            "peak_probability": float(prob.max()),
-            "delays_ms": mc_delays.tolist(),
-            "probability": prob.tolist(),
-            "n_trials": a.trials,
-        },
+        "noisy_check": noisy_checks["small"],
+        "noisy_check_default_noise": noisy_checks["default"],
     }
     # imported here rather than at the top: pool workers re-import this script,
     # and only the main process draws

@@ -806,9 +806,14 @@ How the widths are computed:
 - Earlier versions read the crossing off a threshold curve on a 20 µs grid.
   Linear interpolation across a curve that bends upward read 0.1–4 µs low, most
   at the 0.5% margin.
-- Noisy trials check this: 1% amplitude jitter plus 5 µs onset jitter give 200
-  µs against `window()`'s 199 µs. If the noise is large enough to keep peak
-  probability near 85%, the half-maximum width comes out about 10% wider.
+- Noisy trials check this (`scripts/coincidence_window.py`'s noisy checks:
+  `TwoCpt.m`, model EPSG, 3% margin, 200 trials per delay, native mode): 1%
+  amplitude jitter plus 5 µs onset jitter per EPSG keep the peak probability
+  at 99.5% and give 200 µs against `window()`'s 199 µs. With
+  `probability_trials`' default noise (3% amplitude CV, 15 µs onset jitter)
+  the peak probability is 80% and the half-maximum width comes out 221 µs,
+  11% wider: the jitter spreads the edges of the window more than it moves
+  them.
 
 Findings:
 
@@ -873,7 +878,7 @@ default):
 
 | Model | Spike height | 50% | Coincident threshold | 3% window | Rheobase (100 ms step) |
 |---|---|---|---|---|---|
-| 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.1 → 199.7 µs (−0.7%) | 3785 → 3852 pA (+1.8%) |
+| 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.2 → 199.8 µs (−0.7%) | 3784 → 3850 pA (+1.7%) |
 | 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 199.0 → 197.9 µs (−0.6%) | 3851 → 3881 pA (+0.8%) |
 | 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.4 → 167.2 µs (−0.1%) | 2070 → 2072 pA (+0.1%) |
 
@@ -888,8 +893,9 @@ default):
   after: 0.0114 nS or 0 gives 167.21 µs either way at rtol 1e-9.
 - At 50% Goldwyn's criterion is today's, so its results don't move. The other
   two models' criterion moves onto the steep upstroke, which raises their
-  thresholds 1.0–1.8% and narrows their 3% windows by at most 0.75%: about 2 µs on
-  200, inside the 0.5% vs 3% margin ambiguity above. Goldwyn still narrows the
+  coincident thresholds 1.1–1.7% and rheobases 0.8–1.7%, and narrows their 3%
+  windows by at most 0.75%: about 2 µs on 200, inside the 0.5% vs 3% margin
+  ambiguity above. Goldwyn still narrows the
   window by 16–17% (−16.8% at 10 mV, −16.3% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
   Goldwyn). The coincident thresholds move more: up to 3%, and Goldwyn's by −13%
@@ -901,8 +907,15 @@ default):
   `somatic.rheobase("two", v0=-58, model_kw={"r1": 8.5, "tau_est": 0.34, "gKHT": 0})`.
   `model_kw` also carries `mode="exact"`, `morph`, `model_type` and `max_step`;
   `mem=` stays as a shorthand for `model_kw={"mem": ...}`.
-- The searches take about 7% more simulations at 50%: the interpolation still
-  converges on the upstroke, a little less efficiently.
+- The searches take more simulations at 50%: the interpolation still converges
+  on the upstroke, a little less efficiently. Counted through
+  `_dispatch.run_model`, as `scripts/benchmark_search.py` counts (exact mode),
+  the table's coincident threshold, 3% window and rheobase searches take 10 +
+  14 + 10 = 34 → 12 + 11 + 12 = 35 simulations (45-compartment), 9 + 11 + 10 =
+  30 → 14 + 12 + 13 = 39 (`TwoCpt.m`) and 12 + 11 + 8 = 31 → 12 + 12 + 8 = 32
+  (Goldwyn) at 10 mV → 50%: 95 → 106 over the three models, 12% more. The
+  spike height costs 9, 8 and 12 runs more, once per configuration.
+  `tests/test_criterion.py` pins the two-compartment counts.
 
 ### Other benchmarks
 
@@ -1072,17 +1085,17 @@ than the spike.
   `msoAxon.m` row (rheobase 3793 against 3784 pA, spike 7.2 / 13.1 / 17.8
   against 7.4 / 13.3 / 18.2 mV). The EPSP is one somatic EPSG of a quarter of
   that cell's coincident threshold; the window is at 3% above that threshold.
-  The 45-compartment −58 mV rows were measured before #128, when the rebalance
-  moved the whole cable to −58 mV (today's `axon_rest=-58`); the script now
-  rebalances only the soma and AIS there (see the bullets below), and the
-  rows await a re-run.
+  The 45-compartment −58 mV rows are the soma-only rebalance of #128 (the
+  script's `rebalance_rest=True` today; before it the whole cable moved to
+  −58 mV, today's `axon_rest=-58`, and fired on its own, so those rows had no
+  Rin). Every row below is `scripts/na_availability.py --mode exact` on 1.12.1.
 
   | 45-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
   | −68, −62.5 | 33% | 3793 pA | 2.43 MΩ | 572 µs | 200 µs | 7.2 / 13.1 / 17.8 mV |
   | −68, −77 | 76% | 4405 pA | 2.39 MΩ | 561 µs | 193 µs | no inflection (peak 23.8 / 30.1 / 38.9) |
-  | −58, −62.5 | 64% | 5289 pA | no stable rest | 329 µs | 137 µs | no inflection (peak 14.9 / 19.9 / 28.0) |
-  | −58, −77 | 92% | 6438 pA | no stable rest | 318 µs | 133 µs | no inflection (peak 14.2 / 18.2 / 25.0) |
+  | −58, −62.5 | 64% | 5602 pA | 0.57 MΩ | 328 µs | 132 µs | no inflection (peak 15.8 / 21.0 / 29.2) |
+  | −58, −77 | 92% | 6835 pA | 0.56 MΩ | 317 µs | 127 µs | no inflection (peak 15.0 / 19.1 / 26.2) |
 
   | 2-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
@@ -1112,9 +1125,11 @@ than the spike.
     is only reported where the rest is steady, and the steadiness check now
     watches every compartment, not only the soma.
   - **The models disagree at −58 mV, because they change different things:**
-    rheobase rises 39% in the 45-compartment model and falls 49% in the
-    2-compartment one; the window narrows from 200 to 137 µs in the first and
-    widens from 199 to 217 µs in the second. `two.get_params` recalibrates every
+    rheobase rises 48% in the 45-compartment model and falls 49% in the
+    2-compartment one; the window narrows from 200 to 132 µs in the first and
+    widens from 199 to 217 µs in the second, and the 45-compartment steady Rin
+    falls from 2.43 to 0.57 MΩ while the 2-compartment one keeps 2.3 MΩ.
+    `two.get_params` recalibrates every
     conductance to the lookup's resting fractions at `v0` (node 3,
     `active-full`, −58 against −68 mV: `gNa1` 154 against 1645 nS, 0.09×;
     `gKLT1` 0.20×; `gh1` 2.33×), so its −58 mV cell is a different cell, with
@@ -1272,11 +1287,16 @@ What it shows:
 - **The minima are broad:** the threshold stays within 1% of its minimum over
   420–450 Hz (sine) and 430–450 Hz (EPSG), so the arms' differences of 11–16 Hz
   (default against rebalanced) are inside the flat bottom.
-- **The EPSG-train minimum is shallow:** 12–14% below the threshold at 100 Hz
+- **The EPSG-train minimum is shallow:** 13.9% (45-compartment, default or
+  rebalanced rest) and 12.3% (`TwoCpt.m`) below the threshold at 100 Hz
   (which is the single-event one), against the paper's 41.5%; the sine
-  threshold at 100 Hz is 2.8× its minimum. Away from the dip a
-  train needs the single-event threshold, so the membrane does not sum EPSGs at
-  rates that do not match its ring.
+  threshold at 100 Hz is 2.8× its minimum in the 45-compartment model and
+  3.0× in `TwoCpt.m`. These are the `dip` of `resonance.epsg_resonance` and
+  `spike_resonance` (the threshold at the lowest frequency over the minimum,
+  1.16, 1.14, 2.79 and 3.01), which `scripts/resonance.py` saves in its JSON
+  and prints in each arm's summary line; measured in native mode. Away from
+  the dip a train needs the single-event threshold, so the membrane does not
+  sum EPSGs at rates that do not match its ring.
 - **Train length:** from 50 to 500 ms (the paper's) the 45-compartment thresholds
   fall 2–6% (the 2-compartment ones do not move, except the 100 Hz sine, down 5%) and its minima move from 428 to
   424 Hz (sine) and 430 to 424 Hz (EPSG), measured in native mode.
