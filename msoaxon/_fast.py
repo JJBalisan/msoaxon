@@ -13,11 +13,12 @@ installed; with a warning when it is installed but fails to load). Every
 configuration of either model is ported. Asking for "fast" or "native" (by
 argument or environment) when it can't run warns and runs "exact".
 
-The first fast run in a process (of either model) checks the multi port
-against multi._rhs on a few fixed states and reports the result in a
-DriftWarning: bit-identical on the
-machine the port was checked on (darwin-arm64), it may differ in the last
-bits on other hardware, where numpy and Rust can use different exp/pow.
+The first fast run in a process (of either model) checks both ports,
+multi._rhs against MultiRhs and two._rhs against TwoCptRhs, on a few fixed
+states each and reports the result per port in a DriftWarning:
+bit-identical on the machine the ports were checked on (darwin-arm64), they
+may differ in the last bits on other hardware, where numpy and Rust can use
+different exp/pow.
 The first native run issues its own DriftWarning: its steps are diffsol's,
 not scipy's, so it agrees with the reference within the solver tolerance,
 not bit for bit.
@@ -27,7 +28,7 @@ import dataclasses
 import importlib
 import os
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -74,6 +75,10 @@ _ext = _import_ext()
 
 MODES = ("fast", "native", "exact")
 MODE_ENV = "MSOAXON_MODE"
+# the two Rust ports self_check compares with their numpy references:
+# multi._rhs (MultiRhs) and two._rhs (TwoCptRhs)
+PORTS = ("multi", "two")
+_PORT_NAMES = {"multi": "45-compartment", "two": "two-compartment"}
 
 # per process: whether the fast and the native DriftWarning have been issued
 # (pool workers inherit the parent's flags, see inherit())
@@ -578,20 +583,101 @@ def _build_two(
     )
 
 
-def self_check(n_states: int = 8) -> tuple[int, int, float]:
+def self_check(
+    n_states: int = 8, port: str | None = None
+) -> tuple[int, int, float]:
     """Compares the Rust and numpy right-hand sides on fixed states.
 
-    Three configurations (the chain with an EPSG pair, active-full; a
-    rebalanced membrane with a step; the dendrites with bilateral EPSGs),
-    each on `n_states` seeded random states while the input is on.
+    Each port is sampled on three configurations, `n_states` seeded random
+    states per configuration, while the input is on. The 45-compartment
+    port: the chain with an EPSG pair, active-full; a rebalanced membrane
+    with a step; the dendrites with bilateral EPSGs. The two-compartment
+    port: node 3 with an EPSG pair into the soma; node 5 with a step into
+    the axon on Goldwyn et al 2019's calibration; node 4 with KLT replaced
+    by a leak and two "Events".
 
     Args:
         n_states: States per configuration.
+        port: "multi" (multi._rhs against MultiRhs), "two" (two._rhs
+            against TwoCptRhs), or None for both, their counts summed and
+            the worst difference over both.
 
     Returns:
         (states that differ in any bit, states compared, largest relative
         difference).
+
+    Raises:
+        ValueError: For a port that is not in PORTS or None.
     """
+    if port is None:
+        results = [self_check(n_states, p) for p in PORTS]
+        return (
+            sum(differ for differ, _, _ in results),
+            sum(total for _, total, _ in results),
+            max(worst for _, _, worst in results),
+        )
+    if port not in PORTS:
+        raise ValueError(f"port must be one of {PORTS} or None, got {port!r}")
+    check = _check_multi if port == "multi" else _check_two
+    return _compare(check(n_states))
+
+
+def _compare(
+    pairs: 'Iterable[tuple[np.ndarray, np.ndarray]]',
+) -> tuple[int, int, float]:
+    """Counts the (Rust, numpy) right-hand sides in `pairs` that differ.
+
+    Returns:
+        self_check's (differ, total, worst).
+    """
+    differ, total, worst = 0, 0, 0.0
+    for got, want in pairs:
+        total += 1
+        if not np.array_equal(got, want):
+            differ += 1
+            scale = np.maximum(np.abs(want), np.finfo(float).tiny)
+            worst = max(worst, float(np.max(np.abs(got - want) / scale)))
+    return differ, total, worst
+
+
+def _check_two(n_states: int) -> 'Iterator[tuple[np.ndarray, np.ndarray]]':
+    """Yields (TwoCptRhs, two._rhs) at self_check's two-compartment states."""
+    two = importlib.import_module("msoaxon.two")
+    common = importlib.import_module("msoaxon._common")
+    rng = np.random.default_rng(20261108)
+    goldwyn = {k: v for k, v in two.GOLDWYN_2019.items() if k != "v0"}
+    events = (synaptic.Event(5.0, 1, 60.0), synaptic.Event(5.2, 3, 40.0))
+    # (stimulus, start, stop, I, SynParams keywords), (v0, node, input
+    # node, model type, get_params keywords)
+    configs = (
+        (
+            ("EPSGpair", 5.0, 5.2, 100.0, {}),
+            (-68.0, 3, 1, "active-full", {}),
+        ),
+        (
+            ("step", 5.0, 10.0, 3000.0, {}),
+            (two.GOLDWYN_2019["v0"], 5, 3, "active-full", goldwyn),
+        ),
+        (
+            ("Events", 0.0, 0.0, 1.0, {"events": events}),
+            (-68.0, 4, 1, "active-KLT+H", {"klt_to_leak": "slope"}),
+        ),
+    )
+    for (stim, start, stop, amp, syn_kw), (v0, node, k, mt, kw) in configs:
+        syn = synaptic.SynParams(t_end=20.0, **syn_kw)
+        s = common.stimulus(stim, start, stop, amp, 20.0, syn)
+        params = two.get_params(v0, node, k, mt, **kw)
+        fast = _build_two(stim, s, params)
+        for _ in range(n_states):
+            t = float(rng.uniform(5.0, 6.0))
+            x = np.concatenate([rng.uniform(-90.0, 30.0, 2), rng.random(9)])
+            yield fast(t, x), np.array(two._rhs(t, x, params, stim, s))
+
+
+def _check_multi(
+    n_states: int,
+) -> 'Iterator[tuple[np.ndarray, np.ndarray]]':
+    """Yields (MultiRhs, multi._rhs) at self_check's 45-compartment states."""
     multi = importlib.import_module("msoaxon.multi")
     common = importlib.import_module("msoaxon._common")
     rng = np.random.default_rng(20261012)
@@ -615,7 +701,6 @@ def self_check(n_states: int = 8) -> tuple[int, int, float]:
         ),
     )
     active = (True,) * 6
-    differ, total, worst = 0, 0, 0.0
     for stim, mem, morph, k, k2 in configs:
         s = common.stimulus(stim, 5.0, 5.2, 60.0, 20.0, syn)
         fast = _build(stim, s, k, active, mem, morph, k2)
@@ -624,30 +709,43 @@ def self_check(n_states: int = 8) -> tuple[int, int, float]:
             x = np.concatenate(
                 [rng.uniform(-90.0, 30.0, morph.n), rng.random(6 * morph.n)]
             )
-            want = multi._rhs(t, x, stim, s, k, active, mem, morph, k2)
-            got = fast(t, x)
-            total += 1
-            if not np.array_equal(got, want):
-                differ += 1
-                scale = np.maximum(np.abs(want), np.finfo(float).tiny)
-                worst = max(worst, float(np.max(np.abs(got - want) / scale)))
-    return differ, total, worst
+            yield (
+                fast(t, x),
+                multi._rhs(t, x, stim, s, k, active, mem, morph, k2),
+            )
 
 
 def _warn_drift() -> None:
-    """Runs self_check() and issues the DriftWarning with its result."""
-    differ, total, worst = self_check()
-    if differ == 0:
+    """Runs self_check() per port and issues the DriftWarning with it.
+
+    The verdict names the port that drifted (#168): a two_cpt run's
+    first-run warning used to report on the 45-compartment port alone.
+    """
+    results = {port: self_check(port=port) for port in PORTS}
+    drifted = [
+        f"the {_PORT_NAMES[port]} port differs from the numpy reference in "
+        f"{differ} of {total} self-check states (largest relative "
+        f"difference {worst:.1e})"
+        for port, (differ, total, worst) in results.items()
+        if differ
+    ]
+    if not drifted:
+        counts = ", ".join(
+            f"{total} states of the {_PORT_NAMES[port]} model"
+            for port, (_, total, _) in results.items()
+        )
         verdict = (
-            f"on this machine it is bit-identical to the numpy reference "
-            f"(self-check: {total} states)"
+            f"on this machine both ports are bit-identical to the numpy "
+            f"reference (self-check: {counts})"
         )
     else:
-        verdict = (
-            f"on this machine it differs from the numpy reference in "
-            f"{differ} of {total} self-check states (largest relative "
-            f"difference {worst:.1e})"
-        )
+        verdict = "on this machine " + " and ".join(drifted)
+        for port, (differ, total, _) in results.items():
+            if not differ:
+                verdict += (
+                    f"; the {_PORT_NAMES[port]} port is bit-identical "
+                    f"({total} states)"
+                )
     warnings.warn(
         f'msoaxon is running its Rust right-hand side (mode="fast", under '
         f"scipy's BDF; the default is mode=\"native\"); "

@@ -351,15 +351,30 @@ def test_runs_are_bit_identical_here(name):
 
 
 @needs_ext
-def test_self_check_passes():
-    differ, total, worst = _fast.self_check()
-    assert total == 24
+@pytest.mark.parametrize("port", [*_fast.PORTS, None])
+def test_self_check_passes(port):
+    differ, total, worst = _fast.self_check(port=port)
+    assert total == (24 if port else 48)
     if BITWISE:
         assert (differ, worst) == (0, 0.0)
     else:
         # elementwise, so cancellation in (x_inf - x) / tau shows; GitHub's
         # ubuntu x86_64 runner measured 2.7e-13 (every state differed)
         assert worst < 1e-10
+
+
+def test_self_check_rejects_an_unknown_port():
+    with pytest.raises(ValueError, match="port must be one of"):
+        _fast.self_check(port="three")
+
+
+@needs_ext
+def test_self_check_sums_the_ports():
+    by_port = [_fast.self_check(4, port) for port in _fast.PORTS]
+    differ, total, worst = _fast.self_check(4)
+    assert differ == sum(d for d, _, _ in by_port)
+    assert total == sum(t for _, t, _ in by_port) == 24
+    assert worst == max(w for _, _, w in by_port)
 
 
 @needs_ext
@@ -492,12 +507,111 @@ def test_drift_warning_fires_once_per_process(monkeypatch):
     assert drift[0].filename == __file__  # points at the caller
 
 
-@needs_ext
-def test_drift_warning_reports_a_mismatch(monkeypatch):
-    monkeypatch.setattr(_fast, "self_check", lambda: (2, 24, 3e-16))
-    with pytest.warns(_fast.DriftWarning, match="2 of 24") as record:
+# a self_check stand-in: (differ, total, worst) per port
+def fake_self_check(**by_port):
+    def self_check(n_states=8, port=None):
+        assert port in _fast.PORTS
+        return by_port[port]
+
+    return self_check
+
+
+def test_drift_warning_reports_a_mismatch_per_port(monkeypatch):
+    monkeypatch.setattr(
+        _fast,
+        "self_check",
+        fake_self_check(multi=(2, 24, 3e-16), two=(0, 24, 0.0)),
+    )
+    with pytest.warns(_fast.DriftWarning) as record:
         _fast._warn_drift()
-    assert "3.0e-16" in str(record[0].message)
+    text = str(record[0].message)
+    assert "the 45-compartment port differs" in text
+    assert "2 of 24 self-check states" in text and "3.0e-16" in text
+    assert "the two-compartment port is bit-identical (24 states)" in text
+    assert "both ports" not in text
+
+
+def test_drift_warning_reports_both_ports_drifting(monkeypatch):
+    monkeypatch.setattr(
+        _fast,
+        "self_check",
+        fake_self_check(multi=(24, 24, 2.7e-13), two=(5, 24, 9e-16)),
+    )
+    with pytest.warns(_fast.DriftWarning) as record:
+        _fast._warn_drift()
+    text = str(record[0].message)
+    assert "the 45-compartment port differs" in text and "2.7e-13" in text
+    assert "and the two-compartment port differs" in text
+    assert "5 of 24 self-check states" in text and "9.0e-16" in text
+    assert "bit-identical" not in text
+
+
+def test_drift_warning_reports_both_ports_identical(monkeypatch):
+    monkeypatch.setattr(
+        _fast,
+        "self_check",
+        fake_self_check(multi=(0, 24, 0.0), two=(0, 24, 0.0)),
+    )
+    with pytest.warns(_fast.DriftWarning, match="both ports are bit-identical"):
+        _fast._warn_drift()
+
+
+@pytest.fixture
+def fake_ext_drifting_in_two(monkeypatch, no_env):
+    """A fake extension whose two-compartment port is off by an ulp.
+
+    Its 45-compartment port is multi._rhs itself; its two-compartment
+    port is two._rhs with the soma's dV/dt moved to the next float, the
+    smallest drift there is (issue #168: the self-check sampled the
+    45-compartment port only, so this went unreported).
+    """
+
+    def build(stim_type, s, input_node, active, mem, morph, input_node2=None):
+        return lambda t, x: multi._rhs(
+            t, x, stim_type, s, input_node, active, mem, morph, input_node2
+        )
+
+    def build_two(stim_type, s, params):
+        def rhs(t, x):
+            out = np.array(two._rhs(t, x, params, stim_type, s))
+            out[0] = np.nextafter(out[0], np.inf)
+            return out
+
+        return rhs
+
+    monkeypatch.setattr(_fast, "_ext", object())
+    monkeypatch.setattr(_fast, "_build", build)
+    monkeypatch.setattr(_fast, "_build_two", build_two)
+
+
+def test_self_check_sees_a_drift_in_the_two_port(fake_ext_drifting_in_two):
+    assert _fast.self_check(port="multi") == (0, 24, 0.0)
+    differ, total, worst = _fast.self_check(port="two")
+    assert (differ, total) == (24, 24)
+    assert 0.0 < worst <= 2 * np.finfo(float).eps
+    assert _fast.self_check() == (24, 48, worst)
+
+
+def test_drift_warning_names_the_two_port(fake_ext_drifting_in_two):
+    with pytest.warns(_fast.DriftWarning) as record:
+        _fast._warn_drift()
+    text = str(record[0].message)
+    assert "the two-compartment port differs from the numpy reference" in text
+    assert "24 of 24 self-check states" in text
+    assert "the 45-compartment port is bit-identical (24 states)" in text
+
+
+def test_two_cpt_first_fast_run_reports_the_two_port(
+    fake_ext_drifting_in_two, monkeypatch
+):
+    # the warning a two_cpt run issues is about the port that run uses
+    monkeypatch.setitem(_fast._STATE, "warned", False)
+    with pytest.warns(_fast.DriftWarning) as record:
+        two.two_cpt(*EPSG8, mode="fast")
+    drift = [w for w in record if issubclass(w.category, _fast.DriftWarning)]
+    assert len(drift) == 1
+    assert "the two-compartment port differs" in str(drift[0].message)
+    assert drift[0].filename == __file__
 
 
 def test_exact_mode_never_warns(monkeypatch):
