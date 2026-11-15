@@ -9,9 +9,10 @@ same version as the package, bumped in the same release PR.
 ## Unreleased
 
 The fast-mode self-check covers the two-compartment port too, `PYTHON.md`'s
-documented numbers are corrected, and `two_cpt` rejects a calibration or
-conductance it cannot run with before it runs (#168, #169, #170, #171). No
-published number moves and no computed result moves.
+documented numbers are corrected and two of its labels say what they
+measure, and `two_cpt` rejects a calibration or conductance it cannot run
+with before it runs (#135, #162, #168, #169, #170, #171). No published number
+moves and no computed result moves.
 
 ### Fixed
 
@@ -56,7 +57,23 @@ published number moves and no computed result moves.
   `multi.membrane` reports `axon_rest`. `tau_est=0`, `tau_est=nan` and
   `gNa2=inf` used to run on to numpy's `LinAlgError` in 1.12.0's rest check,
   after `RuntimeWarning`s from `two._rhs`, with no argument named (#170).
-
+- `PYTHON.md`, "Spike criterion": the margin is node minus soma at the same
+  instant, so at a rebalanced rest other than −68 mV
+  (`membrane(rebalance_rest=True)`, where the axon keeps `axon_rest`) it
+  includes the compartments' resting offset. On the −58 mV cell node 3 rests
+  0.170 mV below the soma (1.7% of the 10 mV) and node 45 9.87 mV below it;
+  removing node 3's offset would lower that cell's rheobase by about 0.25%
+  (5602 → 5588 pA at V½ −62.5, 6835 → 6816 at −77; native, `rel_tol` 1e-4).
+  The Na availability −58 mV rows were measured with the offset in the
+  margin and stay; the comment on `_common.FACTOR` points there (#135).
+- `PYTHON.md`'s "2-compartment, Goldwyn 2019 calibration" rows (the 167 µs
+  window, 26.35 nS threshold, 20.2 mV spike and 2070 pA rheobase) and the
+  sentences quoting them are relabelled "`TwoCpt.m` at Goldwyn's passive
+  targets" or `GOLDWYN_2019`, and "Lineage" tabulates what the preset keeps
+  from `TwoCpt.m` against Goldwyn et al 2019's model (somatic Na, h, `gNa2`
+  119 nS, E_K −90 mV, E_Na 69 mV; KHT 0 is the one thing it drops). The
+  preset, its numbers and the golden traces are unchanged; the comment on
+  `two.GOLDWYN_2019` says the same (#162).
 
 ## 1.12.1 (7 Nov 2026)
 

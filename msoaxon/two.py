@@ -17,8 +17,10 @@ from msoaxon import _common, _fast, _solve, constants as C, synaptic
 # model's coupling-constant framework comes from: their passive targets, which
 # TwoCpt.m still carries as comments (%8.5, %-58) beside the values it replaced
 # them with, and no KHT, since their model has none. This is not their whole
-# model, which has Na in the axon compartment only, no h and E_K -106 mV; the
-# preset keeps TwoCpt.m's channels otherwise.
+# model: the preset keeps TwoCpt.m's channels otherwise (somatic Na, h,
+# gNa2 119 nS, E_K -90 and E_Na 69 mV, against their axon-only Na, no h,
+# E_K -106 and E_Na 55 mV), so its results are TwoCpt.m at Goldwyn's passive
+# targets, not Goldwyn's model's (PYTHON.md, "Lineage"; #162).
 GOLDWYN_2019 = {"r1": 8.5, "tau_est": 0.34, "v0": -58.0, "gKHT": 0.0}
 
 # Soma input resistance of TwoCpt.m [MOhm]: the default of r1 below.
