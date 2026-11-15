@@ -450,14 +450,15 @@ The numbers published here are exact mode's. Native is held to the golden
 traces, and at the printed precision it can differ from those numbers in the
 last digit. Windows move by up to 0.3 µs, which is enough to change how they
 round: exact and native give 199.05 and 199.07 µs for the 3% window, 167.38 and
-167.24 for Goldwyn's (167.2 at rtol 1e-10) and 215.26 and 215.53 for the Myoga
-EPSG at the 50% criterion. Goldwyn's rheobase is 2069.6 and 2069.4 pA, a sine
-`BinarySearch.m` point two search steps apart is 11559.4 and 11563.1 pA, and the
-passive-step peak (`passive_step`'s default −2 pA step) is 4.8690 and 4.8711 MΩ;
-both give 4.8697 at rtol 1e-10, so only its first three digits are settled. The
-tighter tolerance also corrected the passive-step `tau`, in both modes: on a
-grid of 20001 points it is 0.1137 ms at 1e-6 and 0.1197 at 1e-8 and 1e-10, and on
-`passive_step`'s default grid 0.1135, 0.1187 and 0.1189.
+167.24 for `GOLDWYN_2019`'s (167.2 at rtol 1e-10) and 215.26 and 215.53 for the
+Myoga EPSG at the 50% criterion. `GOLDWYN_2019`'s rheobase is 2069.6 and 2069.4
+pA, a sine `BinarySearch.m` point two search steps apart is 11559.4 and 11563.1
+pA, and the passive-step peak (`passive_step`'s default −2 pA step) is 4.8690
+and 4.8711 MΩ; both give 4.8697 at rtol 1e-10, so only its first three digits
+are settled. The tighter tolerance also corrected the passive-step `tau`, in
+both modes: on a grid of 20001 points it is 0.1137 ms at 1e-6 and 0.1197 at
+1e-8 and 1e-10, and on `passive_step`'s default grid 0.1135, 0.1187 and
+0.1189.
 
 The golden tolerance holds for the golden runs, not for every input. In a random sweep of
 stimuli, nodes and knobs, 12 of 392 runs from a stable rest went past it at a
@@ -618,7 +619,8 @@ reference these are history; they are not reverted.
 - **Thresholds and coincidence windows** come from the predictive search in
   `msoaxon/_bisect.py`, not a MATLAB-style bisection. Full reruns against plain
   bisection move windows by under 0.4 µs and thresholds by under 1e-4
-  (relative); one rounded value changed (Goldwyn, Myoga EPSG: 183 → 182 µs).
+  (relative); one rounded value changed (`GOLDWYN_2019`, Myoga EPSG: 183 → 182
+  µs).
   These values are the reference. Single runs never depended on the search.
   Rheobase has used it since issue #19: the multi and two step responses rise
   smoothly through 10 mV like the EPSG pairs, so it takes 10–11 runs instead of
@@ -712,8 +714,26 @@ The old values survive as comments beside the new ones (`%8.5`, `%-58`).
 `GOLDWYN_2019` in `msoaxon/two.py` restores them:
 `two_cpt(..., v0=-58, r1=8.5, tau_est=0.34, gKHT=0)`. Goldwyn's model has no
 KHT; `TwoCpt.m`'s comes from Lehnert et al. 2014. The preset is those targets and
-no KHT, not Goldwyn's whole model, which has Na in the axon compartment only, no
-h and E_K −106 mV; it keeps `TwoCpt.m`'s h, somatic Na, `gNa2` and E_K.
+no KHT, not Goldwyn's whole model: everything else stays `TwoCpt.m`'s, so its
+results, labelled "`TwoCpt.m` at Goldwyn's passive targets" or `GOLDWYN_2019`
+on this page, are that model at those targets, not Goldwyn's model (#162). What
+differs, from the Materials and methods of the PLOS text (the Na kinetics have
+not been compared):
+
+| | Goldwyn 2019 | `GOLDWYN_2019` |
+|---|---|---|
+| Somatic Na | none: the axon compartment is the site of I_Na | kept, from the soma's resting fraction |
+| Axonal Na | yes | `gNa2` 119 nS, `TwoCpt.m`'s value for node 3 |
+| h current | not in the model as described | kept, 37% of the soma's resting conductance |
+| KLT | frozen as a leak in the first simulations, dynamic in others | dynamic |
+| KHT | none | 0 |
+| E_K | −106 mV | −90 mV |
+| E_Na | 55 mV | 69 mV |
+
+Removing KHT alone barely matters (26.351 nS and 2069.6 pA at `gKHT=0` against
+26.371 nS and 2071.9 pA at the 183 nS default, −58 mV, 8.5 MΩ, 0.34 ms); the
+other differences have not been measured, and E_K and the h conductance both
+set the resting state. No number here moved for this: the rows were relabelled.
 
 The coupling `node` looks up (forward and backward constants, the area ratio,
 the KLT and h fractions and the axonal Na conductance) is a default, not a
@@ -785,7 +805,7 @@ Measured the way Myoga et al. 2014 did in adult gerbil MSO at 35 °C
 |---|---|---|
 | 45-compartment | 201 µs | 219 µs |
 | 2-compartment, `TwoCpt.m` | 199 µs | 217 µs |
-| 2-compartment, Goldwyn 2019 calibration | 167 µs | 182 µs |
+| 2-compartment, `TwoCpt.m` at Goldwyn's passive targets | 167 µs | 182 µs |
 
 These widths use inputs 3% above threshold. At 0.5% they shrink to 69–91 µs. The
 margin matters a lot, and the paper's "200 pS (~3%)" is ambiguous: 200 pS is
@@ -819,7 +839,8 @@ Findings:
 
 - With matched methods, the original calibration reproduces the measured window
   closely.
-- Goldwyn's faster membrane narrows it by about 17%.
+- `TwoCpt.m` at Goldwyn's passive targets (`GOLDWYN_2019`), a faster membrane,
+  narrows it by about 17%.
 - An earlier estimate here (half-way point of the threshold curve, ~340 µs)
   measured a different quantity.
 - Inhibition is modelled as an event (see "Inhibition: the IPSG and `dt_inh`"
@@ -844,14 +865,31 @@ means different things in different models:
 - **45-compartment and `TwoCpt.m`:** 10 mV is about 26% of their spike (38 mV of
   axon − soma). It sits on the foot of the takeoff, which comes 1–3% above that
   threshold.
-- **Goldwyn's calibration:** 10 mV is about 50% of its spike (20 mV). Its
-  response is graded rather than all-or-none: the peak grows smoothly from 5.8
-  to 19.6 mV between 0.9× and 1.5× threshold. So for Goldwyn the criterion
-  *defines* the threshold rather than locating it. A 5 or 15 mV criterion moves
-  its coincident threshold by −13% or +8%. Its windows are robust, though: they
-  move by at most 4%.
-- A fixed 20 or 30 mV criterion is out of reach for Goldwyn's calibration
-  altogether.
+- **`TwoCpt.m` at Goldwyn's passive targets (`GOLDWYN_2019`):** 10 mV is about
+  50% of its spike (20 mV). Its response is graded rather than all-or-none: the
+  peak grows smoothly from 5.8 to 19.6 mV between 0.9× and 1.5× threshold. So
+  for that preset the criterion *defines* the threshold rather than locating
+  it. A 5 or 15 mV criterion moves its coincident threshold by −13% or +8%. Its
+  windows are robust, though: they move by at most 4%.
+- A fixed 20 or 30 mV criterion is out of reach for `GOLDWYN_2019` altogether.
+
+The margin is the node's potential minus the soma's at the same instant
+(`_dispatch.run_model`, `_solve`'s spike event), not each compartment's rise
+above its own rest; the relative criteria below inherit it through
+`spike_height()`. The two readings agree while the compartments share a rest.
+At a rebalanced rest other than −68 mV (`membrane(rebalance_rest=True)` with
+another `v0`) the axon keeps `axon_rest`, so the margin includes the resting
+offset between the two compartments (#135). On the −58 mV cell (#134's
+measured rests) node 3 rests 0.170 mV below the soma, 1.7% of the 10 mV, and
+node 45 rests 9.87 mV below it, so a spike recorded at node 45 has to rise
+about 20 mV above that node's own rest to count. Removing node 3's offset from
+the criterion (9.83 mV instead of 10) would lower the −58 mV rheobase by about
+0.25% (5602 → 5588 pA at V½ −62.5) and 0.28% (6835 → 6816 pA at −77), native
+mode, `rel_tol` 1e-4; the windows were not re-measured. The 45-compartment
+−58 mV rows of the Na availability table ("Somatic spike" below) were measured
+this way, with the offset in the margin, and every published number keeps it.
+The default −68 mV cell, which starts flat and drifts about 0.9 mV, carries an
+offset of the same kind; the soma-only rebalance did not change it.
 
 The criterion is an option (issue #21). `coincidence.threshold`,
 `threshold_curve`, `window` and `probability_trials`, and `somatic.fires`,
@@ -880,27 +918,28 @@ default):
 |---|---|---|---|---|---|
 | 45-compartment | 38.4 mV | 19.2 mV | 48.01 → 48.81 nS (+1.7%) | 201.2 → 199.8 µs (−0.7%) | 3784 → 3850 pA (+1.7%) |
 | 2-compartment, `TwoCpt.m` | 38.0 mV | 19.0 mV | 47.76 → 48.26 nS (+1.1%) | 199.0 → 197.9 µs (−0.6%) | 3851 → 3881 pA (+0.8%) |
-| 2-compartment, Goldwyn 2019 calibration | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.4 → 167.2 µs (−0.1%) | 2070 → 2072 pA (+0.1%) |
+| 2-compartment, `TwoCpt.m` at Goldwyn's passive targets | 20.2 mV | 10.1 mV | 26.35 → 26.39 nS (+0.1%) | 167.4 → 167.2 µs (−0.1%) | 2070 → 2072 pA (+0.1%) |
 
 - With the Myoga EPSG the shifts are the same size: the 3% windows go 219 →
   217.5, 216.6 → 215.3 and 182.2 → 182.2 µs.
 - The 0.5% windows narrow by 0.5–0.8% for the 45-compartment and `TwoCpt.m`
   models.
 - The windows carry about 0.2 µs of solver jitter at production tolerance
-  (1e-8), so the last digit is not a model effect. Goldwyn's 3% window is 167.38
-  µs at 1e-8, 167.21 at 1e-9 and 167.18 at 1e-10 (`TwoCpt.m`'s: 199.05, 199.06,
-  199.06). Its own KHT is negligible before the `TwoCpt.m` KHT correction and 0
-  after: 0.0114 nS or 0 gives 167.21 µs either way at rtol 1e-9.
-- At 50% Goldwyn's criterion is today's, so its results don't move. The other
-  two models' criterion moves onto the steep upstroke, which raises their
+  (1e-8), so the last digit is not a model effect. `GOLDWYN_2019`'s 3% window is
+  167.38 µs at 1e-8, 167.21 at 1e-9 and 167.18 at 1e-10 (`TwoCpt.m`'s: 199.05,
+  199.06, 199.06). Its own KHT is negligible before the `TwoCpt.m` KHT
+  correction and 0 after: 0.0114 nS or 0 gives 167.21 µs either way at rtol
+  1e-9.
+- At 50% `GOLDWYN_2019`'s criterion is today's, so its results don't move. The
+  other two models' criterion moves onto the steep upstroke, which raises their
   coincident thresholds 1.1–1.7% and rheobases 0.8–1.7%, and narrows their 3%
   windows by at most 0.75%: about 2 µs on 200, inside the 0.5% vs 3% margin
-  ambiguity above. Goldwyn still narrows the
+  ambiguity above. `GOLDWYN_2019` still narrows the
   window by 16–17% (−16.8% at 10 mV, −16.3% at 50%).
 - At 25% or 75% of the height, the 3% windows change by at most 1.8% (4% for
-  Goldwyn). The coincident thresholds move more: up to 3%, and Goldwyn's by −13%
-  at 25%, where the criterion is below its takeoff.
-- Goldwyn's rheobase is the same 100 ms step run with its calibration
+  `GOLDWYN_2019`). The coincident thresholds move more: up to 3%, and
+  `GOLDWYN_2019`'s by −13% at 25%, where the criterion is below its takeoff.
+- `GOLDWYN_2019`'s rheobase is the same 100 ms step run with the preset
   (`v0=-58, r1=8.5, tau_est=0.34, gKHT=0`). `somatic.fires`, `response`, `rheobase` and
   `spike_amplitude` take a `model_kw` dict like `coincidence.threshold`, so the
   2070 pA is
@@ -913,8 +952,8 @@ default):
   the table's coincident threshold, 3% window and rheobase searches take 10 +
   14 + 10 = 34 → 12 + 11 + 12 = 35 simulations (45-compartment), 9 + 11 + 10 =
   30 → 14 + 12 + 13 = 39 (`TwoCpt.m`) and 12 + 11 + 8 = 31 → 12 + 12 + 8 = 32
-  (Goldwyn) at 10 mV → 50%: 95 → 106 over the three models, 12% more. The
-  spike height costs 9, 8 and 12 runs more, once per configuration.
+  (`GOLDWYN_2019`) at 10 mV → 50%: 95 → 106 over the three models, 12% more.
+  The spike height costs 9, 8 and 12 runs more, once per configuration.
   `tests/test_criterion.py` pins the two-compartment counts.
 
 ### Other benchmarks
@@ -1089,6 +1128,8 @@ than the spike.
   script's `rebalance_rest=True` today; before it the whole cable moved to
   −58 mV, today's `axon_rest=-58`, and fired on its own, so those rows had no
   Rin). Every row below is `scripts/na_availability.py --mode exact` on 1.12.1.
+  The −58 mV rows' spike margin is node 3 minus the soma, which includes node
+  3's 0.17 mV resting offset below it (see "Spike criterion"; #135).
 
   | 45-compartment: rest, V½ | inactivated | rheobase | Rin | EPSP half-width | 3% window | somatic spike 1.5× / 2× / 3× |
   |---|---|---|---|---|---|---|
