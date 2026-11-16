@@ -431,5 +431,7 @@ def test_self_check_is_untouched_by_the_m_gating_names():
     # the new gating names reach both Rust constructors
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        checked, same, worst = _fast.self_check(2)
-    assert checked > 0 and worst < 1e-10
+        differ, compared, worst = _fast.self_check(2)
+    # (states that differ in any bit, states compared, worst difference):
+    # how many differ depends on the platform's libm, so only the bound
+    assert compared > 0 and 0 <= differ <= compared and worst < 1e-10

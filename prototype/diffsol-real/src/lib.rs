@@ -83,6 +83,7 @@ impl RhsArgs {
             child: self.child.clone(),
             active: self.active,
             gating: core::Gating::from_map(&self.gating)?,
+            g_m: None,
         };
         let spec = core::StimSpec {
             stim_type: self.stim_type.clone(),
