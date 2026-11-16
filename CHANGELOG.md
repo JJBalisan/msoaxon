@@ -30,6 +30,10 @@ moves and no computed result moves.
   compartment. The Rust right-hand sides, analytic Jacobians and the native
   integrator's tree solver take the extra gate; without it every state,
   key and bit is as before.
+  A nonzero `gM1`/`gM2` or a KLT -> M swap with a model type that has no
+  KLT raises rather than running without M.
+- `spiking.spike_indices`: the sample of each spike by BinarySearch.m's rule;
+  `count_spikes` is its length.
 - `scripts/kv7_deprivation.py`: Jing et al 2025's deprivation scenario
   (KLT swapped for M, AIS capacitance and leak +50%) in both models, gKHT at
   0, 150 and 225 nS, and a nodal x AIS Kv7 sweep in the 45-compartment
