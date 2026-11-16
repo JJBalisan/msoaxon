@@ -12,14 +12,23 @@
 //! but "Events" is driven by the soma voltage V1, also when it enters the
 //! axon compartment.
 //!
-//! The state is `two.py`'s: V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2.
+//! The state is `two.py`'s: V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2, and,
+//! with the M-type K current on (gM1 or gM2 not 0, #85), u1, u2.
 
 use std::collections::HashMap;
 
-use crate::core::{finite_over, logistic, relax, CoreError, Epsg, EventTable, Gating, Table};
+use crate::core::{
+    finite_over, jac_u, logistic, rate_u, relax, CoreError, Epsg, EventTable, Gating, Table,
+};
 
-/// The number of states.
+/// The number of states without the M current.
 pub const NSTATES: usize = 11;
+
+/// The number of states with it: u1 and u2 appended.
+pub const NSTATES_M: usize = 13;
+
+/// The M gates' state indices and compartments.
+const M_GATES: [(usize, usize); 2] = [(11, 0), (12, 1)];
 
 /// Each gate's state index and its compartment (0 the soma, 1 the axon).
 const GATES: [(usize, usize); 9] = [
@@ -94,6 +103,9 @@ two_params! {
     g_kht = "gKHT", v_k = "VK", ikht0 = "IKHT0",
     /// The compartment the stimulus enters: 1 the soma, else the axon.
     iapp_loc = "IappLoc",
+    /// The M-type K conductances [nS] and resting currents [pA] (#85);
+    /// both conductances 0 is no M current and 11 states.
+    g_m1 = "gM1", g_m2 = "gM2", im0_1 = "IM0_1", im0_2 = "IM0_2",
 }
 
 /// The stimulus, with the fields of `_common.stimulus` that
@@ -436,6 +448,8 @@ pub struct TwoCptRhs {
     stim: Stim,
     /// Whether the stimulus enters the soma (`IappLoc == 1`).
     soma_input: bool,
+    /// Whether the M current is on (`TwoCptParams.has_m`).
+    m_on: bool,
     /// [`jac_sparsity`], built once.
     rows: Vec<usize>,
     cols: Vec<usize>,
@@ -561,15 +575,27 @@ impl TwoCptRhs {
             other => return Err(CoreError(format!("unknown stim_type {other:?}"))),
         };
         let soma_input = p.iapp_loc == 1.0;
-        let (rows, cols) = jac_sparsity();
+        let m_on = p.g_m1 != 0.0 || p.g_m2 != 0.0;
+        let (rows, cols) = jac_sparsity_m(m_on);
         Ok(TwoCptRhs {
             p,
             gating,
             stim,
             soma_input,
+            m_on,
             rows,
             cols,
         })
+    }
+
+    /// The number of states: [`NSTATES`], or [`NSTATES_M`] with the M
+    /// current.
+    pub fn nstates(&self) -> usize {
+        if self.m_on {
+            NSTATES_M
+        } else {
+            NSTATES
+        }
     }
 
     /// (Iapp1, Iapp2): the input currents into the soma and the axon [pA],
@@ -604,7 +630,8 @@ impl TwoCptRhs {
         }
     }
 
-    /// Writes dx/dt for state `x` at time `t` into `out` (both 11 long).
+    /// Writes dx/dt for state `x` at time `t` into `out` (both
+    /// [`nstates`](Self::nstates) long).
     pub fn eval(&self, t: f64, x: &[f64], out: &mut [f64]) {
         let (p, c) = (&self.p, &self.gating);
         let [v1, v2, w1, h1, w2, m1, m2, h2, kp, a1, a2] =
@@ -627,8 +654,19 @@ impl TwoCptRhs {
         let ic = p.g_c * (v1 - v2);
         let (iapp1, iapp2) = self.currents(t, v1, v2);
 
-        out[0] = (-ilk1 - iklt1 - ic + iapp1 - ina1 - ih1 - ikht) / p.cap1;
-        out[1] = (-ilk2 - iklt2 + ic + iapp2 - ina2 - ih2) / p.cap2;
+        if self.m_on {
+            // two._rhs: the M currents last, so 11 states keep every bit
+            let (u1, u2) = (x[11], x[12]);
+            let im1 = p.g_m1 * u1 * (v1 - p.e_k) - p.im0_1;
+            let im2 = p.g_m2 * u2 * (v2 - p.e_k) - p.im0_2;
+            out[0] = (-ilk1 - iklt1 - ic + iapp1 - ina1 - ih1 - ikht - im1) / p.cap1;
+            out[1] = (-ilk2 - iklt2 + ic + iapp2 - ina2 - ih2 - im2) / p.cap2;
+            out[11] = rate_u(c, v1, u1);
+            out[12] = rate_u(c, v2, u2);
+        } else {
+            out[0] = (-ilk1 - iklt1 - ic + iapp1 - ina1 - ih1 - ikht) / p.cap1;
+            out[1] = (-ilk2 - iklt2 + ic + iapp2 - ina2 - ih2) / p.cap2;
+        }
         out[2] = rate_w(c, v1, w1);
         out[3] = rate_h(c, v1, p.na_vhalf1, h1);
         out[4] = rate_w(c, v2, w2);
@@ -650,7 +688,12 @@ impl TwoCptRhs {
         let [v1, v2, w1, h1, w2, m1, m2, h2, kp, a1, a2] =
             <[f64; NSTATES]>::try_from(&x[..NSTATES]).unwrap();
         let z = p.z_rest;
-        let mut j = [[0.0f64; NSTATES]; NSTATES];
+        let mut j = [[0.0f64; NSTATES_M]; NSTATES_M];
+        let (u1, u2) = if self.m_on {
+            (x[11], x[12])
+        } else {
+            (0.0, 0.0)
+        };
 
         // d Iapp_c / d V_v: every stimulus but "Events" is driven by V1,
         // into the compartment it enters; an event by its own compartment
@@ -685,7 +728,8 @@ impl TwoCptRhs {
             + p.g_c
             + p.g_na1 * m1_3 * m1 * nah1
             + p.g_h1 * a1
-            + p.g_kht * kp;
+            + p.g_kht * kp
+            + p.g_m1 * u1;
         j[0][0] = (d[0][0] - g1) / p.cap1;
         j[0][1] = (p.g_c + d[0][1]) / p.cap1;
         j[0][2] = -(p.g_klt1 * 4.0 * w1_3 * z * e_k1) / p.cap1;
@@ -693,8 +737,12 @@ impl TwoCptRhs {
         j[0][5] = -(p.g_na1 * 4.0 * m1_3 * nah1 * e_na1) / p.cap1;
         j[0][8] = -(p.g_kht * (v1 - p.v_k)) / p.cap1;
         j[0][9] = -(p.g_h1 * (v1 - p.v_h)) / p.cap1;
-        let g2 =
-            p.g_lk2 + p.g_klt2 * w2_3 * w2 * z + p.g_c + p.g_na2 * m2_3 * m2 * nah2 + p.g_h2 * a2;
+        let g2 = p.g_lk2
+            + p.g_klt2 * w2_3 * w2 * z
+            + p.g_c
+            + p.g_na2 * m2_3 * m2 * nah2
+            + p.g_h2 * a2
+            + p.g_m2 * u2;
         j[1][1] = (d[1][1] - g2) / p.cap2;
         j[1][0] = (p.g_c + d[1][0]) / p.cap2;
         j[1][4] = -(p.g_klt2 * 4.0 * w2_3 * z * e_k2) / p.cap2;
@@ -718,6 +766,15 @@ impl TwoCptRhs {
             j[g][k] = dv;
             j[g][g] = dx;
         }
+        if self.m_on {
+            j[0][11] = -(p.g_m1 * e_k1) / p.cap1;
+            j[1][12] = -(p.g_m2 * e_k2) / p.cap2;
+            for ((g, k), (v, x)) in M_GATES.into_iter().zip([(v1, u1), (v2, u2)]) {
+                let (dv, dx) = jac_u(c, v, x);
+                j[g][k] = dv;
+                j[g][g] = dx;
+            }
+        }
         for (e, (&r, &col)) in self.rows.iter().zip(&self.cols).enumerate() {
             out[e] = j[r][col];
         }
@@ -736,16 +793,23 @@ impl TwoCptRhs {
 /// into the axon is driven by V1) and to its own compartment's gates; each
 /// gate to its own voltage and itself.
 pub fn jac_sparsity() -> (Vec<usize>, Vec<usize>) {
+    jac_sparsity_m(false)
+}
+
+/// [`jac_sparsity`], with the M gates u1 and u2 when `m_on`.
+pub fn jac_sparsity_m(m_on: bool) -> (Vec<usize>, Vec<usize>) {
+    let m_gates: &[(usize, usize)] = if m_on { &M_GATES } else { &[] };
+    let gates: Vec<(usize, usize)> = GATES.iter().chain(m_gates).copied().collect();
     let (mut rows, mut cols) = (Vec::new(), Vec::new());
     for v in 0..2 {
         let mut col = vec![0, 1];
-        col.extend(GATES.iter().filter(|g| g.1 == v).map(|g| g.0));
+        col.extend(gates.iter().filter(|g| g.1 == v).map(|g| g.0));
         for r in col {
             rows.push(r);
             cols.push(v);
         }
     }
-    for (g, k) in GATES {
+    for (g, k) in gates {
         rows.extend([k, g]);
         cols.extend([g, g]);
     }
@@ -789,6 +853,10 @@ pub(crate) mod tests {
             ("VK", -90.0),
             ("IKHT0", -3.0),
             ("IappLoc", iapp_loc),
+            ("gM1", 0.0),
+            ("gM2", 0.0),
+            ("IM0_1", 0.0),
+            ("IM0_2", 0.0),
             ("couple12", 0.8),
         ]
         .map(|(k, v)| (k.to_string(), v))
@@ -881,37 +949,80 @@ pub(crate) mod tests {
         out
     }
 
+    /// [`params`] with the M current on in both compartments (#85).
+    pub(crate) fn m_params(iapp_loc: f64) -> TwoParams {
+        TwoParams {
+            g_m1: 300.0,
+            g_m2: 40.0,
+            im0_1: -1.5,
+            im0_2: -0.4,
+            ..params(iapp_loc)
+        }
+    }
+
+    /// [`models`], and an EPSG pair and a step with the M current.
+    fn all_models() -> Vec<(String, TwoCptRhs, f64)> {
+        let mut out = models();
+        for loc in [1.0, 2.0] {
+            for (s, t) in [
+                (spec("EPSGpair", 5.0, 5.2, 50.0), 5.3),
+                (spec("step", 5.0, 10.0, 3000.0), 6.0),
+            ] {
+                let name = format!("M, {} into {loc}", s.stim_type);
+                out.push((
+                    name,
+                    TwoCptRhs::new(m_params(loc), gating(), &s).unwrap(),
+                    t,
+                ));
+            }
+        }
+        out
+    }
+
+    /// [`states`] for `rhs`: with the M gates, u1 and u2 appended, and one
+    /// more state with V2 at -30 mV exactly, tau_u's removable point.
+    fn states_for(rhs: &TwoCptRhs) -> Vec<(&'static str, Vec<f64>)> {
+        let mut out = states();
+        if rhs.nstates() == NSTATES_M {
+            let mut at = out[0].1.clone();
+            at[1] = -30.0;
+            out.push(("V2 at -30 mV", at));
+            for (_, x) in &mut out {
+                x.extend([0.04, 0.3]);
+            }
+        }
+        out
+    }
+
     #[test]
     fn the_jacobian_is_its_pattern_and_central_differences_of_eval() {
         // as core.rs's test: off the pattern no row moves at all, on it the
         // analytic value agrees with a central difference
-        let (rows, cols) = jac_sparsity();
-        let mut slot = vec![None; NSTATES * NSTATES];
-        for (e, (&r, &c)) in rows.iter().zip(&cols).enumerate() {
-            assert!(
-                slot[r * NSTATES + c].replace(e).is_none(),
-                "({r}, {c}) twice"
-            );
-        }
-        for (name, rhs, t) in models() {
-            for (label, x) in states() {
+        for (name, rhs, t) in all_models() {
+            let ns = rhs.nstates();
+            let (rows, cols) = rhs.pattern();
+            let mut slot = vec![None; ns * ns];
+            for (e, (&r, &c)) in rows.iter().zip(cols).enumerate() {
+                assert!(slot[r * ns + c].replace(e).is_none(), "({r}, {c}) twice");
+            }
+            for (label, x) in states_for(&rhs) {
                 let mut jac = vec![f64::NAN; rows.len()];
                 rhs.jacobian(t, &x, &mut jac);
                 assert!(jac.iter().all(|v| v.is_finite()), "{name}, {label}");
-                let mut scale = [0.0_f64; NSTATES];
+                let mut scale = vec![0.0_f64; ns];
                 for (e, &r) in rows.iter().enumerate() {
                     scale[r] = scale[r].max(jac[e].abs());
                 }
-                let (mut fp, mut fm) = ([0.0; NSTATES], [0.0; NSTATES]);
-                for c in 0..NSTATES {
+                let (mut fp, mut fm) = (vec![0.0; ns], vec![0.0; ns]);
+                for c in 0..ns {
                     let h = 1e-5 * (1.0 + x[c].abs());
                     let mut y = x.clone();
                     y[c] = x[c] + h;
                     rhs.eval(t, &y, &mut fp);
                     y[c] = x[c] - h;
                     rhs.eval(t, &y, &mut fm);
-                    for r in 0..NSTATES {
-                        match slot[r * NSTATES + c] {
+                    for r in 0..ns {
+                        match slot[r * ns + c] {
                             None => assert_eq!(fp[r], fm[r], "{name}, {label}: ({r}, {c})"),
                             Some(e) => {
                                 let fd = (fp[r] - fm[r]) / (2.0 * h);
@@ -927,6 +1038,29 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_m_current_comes_last_and_off_is_eleven_states() {
+        let s = spec("step", 5.0, 10.0, 3000.0);
+        let plain = TwoCptRhs::new(params(1.0), gating(), &s).unwrap();
+        let with_m = TwoCptRhs::new(m_params(1.0), gating(), &s).unwrap();
+        assert_eq!((plain.nstates(), with_m.nstates()), (NSTATES, NSTATES_M));
+        assert_eq!(jac_sparsity_m(false), jac_sparsity());
+        assert_eq!(jac_sparsity_m(true).0.len(), 4 + 11 * 3);
+        let mut x = states()[1].1.clone();
+        let (mut a, mut b) = ([0.0; NSTATES], [0.0; NSTATES_M]);
+        plain.eval(6.0, &x, &mut a);
+        x.extend([0.05, 0.4]);
+        with_m.eval(6.0, &x, &mut b);
+        assert_eq!(a[2..], b[2..NSTATES]);
+        let (p, c) = (m_params(1.0), gating());
+        let im1 = p.g_m1 * 0.05 * (x[0] - p.e_k) - p.im0_1;
+        let im2 = p.g_m2 * 0.4 * (x[1] - p.e_k) - p.im0_2;
+        assert!((a[0] - b[0] - im1 / p.cap1).abs() < 1e-9 * a[0].abs().max(1.0));
+        assert!((a[1] - b[1] - im2 / p.cap2).abs() < 1e-9 * a[1].abs().max(1.0));
+        assert_eq!(b[11], rate_u(&c, x[0], 0.05));
+        assert_eq!(b[12], rate_u(&c, x[1], 0.4));
     }
 
     #[test]

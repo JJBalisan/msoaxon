@@ -14,6 +14,27 @@ measure, and `two_cpt` rejects a calibration or conductance it cannot run
 with before it runs (#135, #162, #168, #169, #170, #171). No published number
 moves and no computed result moves.
 
+### Added
+
+- An M-type (Kv7) K current in both models, off by default (#85). The gate
+  is Mainen & Sejnowski 1996's `km.mod` (V-half -30 mV, slope 9 mV, Q10 2.3
+  from 23 C; tau 12.0 ms at -58 mV), an inference from Jing et al 2025 and
+  Kuba et al 2015, whose full texts were not read: `constants.uinf` and
+  `constants.tauu`, its constants passed to Rust through `_fast._gating()`.
+  `multi.membrane(soma_m_density=, ais_m_density=, node_m_density=)` adds an
+  eighth state block, `u`, which moves with KLT's `w`; `ais_cap_scale` and
+  `ais_leak_scale` scale the AIS's capacitance and leak.
+  `two_cpt(gM1=, gM2=)` appends `u1, u2` to the state; `klt_to_m` and
+  `soma_klt_to_m` swap a compartment's KLT for M of the same maximal
+  conductance, and `axon_cap_scale`, `axon_leak_scale` scale the axon
+  compartment. The Rust right-hand sides, analytic Jacobians and the native
+  integrator's tree solver take the extra gate; without it every state,
+  key and bit is as before.
+- `scripts/kv7_deprivation.py`: Jing et al 2025's deprivation scenario
+  (KLT swapped for M, AIS capacitance and leak +50%) in both models, gKHT at
+  0, 150 and 225 nS, and a nodal x AIS Kv7 sweep in the 45-compartment
+  model. Its numbers are proposals, not published rows.
+
 ### Fixed
 
 - `_fast.self_check` samples `two._rhs` against `msoaxon_fast.TwoCptRhs` on

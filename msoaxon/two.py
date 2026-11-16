@@ -1,7 +1,8 @@
 """Two-compartment soma + axon model (port of TwoCpt.m and TwoCptODE.m).
 
 State vector (11): V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 — same order as the
-MATLAB code, so x[:, 0] is the soma and x[:, 1] the axon compartment.
+MATLAB code, so x[:, 0] is the soma and x[:, 1] the axon compartment. With the
+M-type K current on (gM1 or gM2 not 0, #85), the M gates u1, u2 follow: 13.
 Currents are in pA, conductances in nS, capacitances in pF, time in ms.
 """
 
@@ -95,6 +96,11 @@ class TwoCptParams:
         na_vhalf1: Somatic Na inactivation midpoint, negated as
             constants.hinf takes it (62.5 for -62.5 mV).
         na_vhalf2: Axonal Na inactivation midpoint, negated likewise.
+        gM1: Somatic M-type (Kv7) K conductance [nS] (#85); 0 with gM2 0
+            is no M current, and the state keeps its 11 entries.
+        gM2: Axonal M-type K conductance [nS].
+        IM0_1: Somatic M current at rest, subtracted [pA].
+        IM0_2: Axonal M current at rest, subtracted [pA].
     """
 
     couple12: float
@@ -132,6 +138,15 @@ class TwoCptParams:
     z_rest: float
     na_vhalf1: float = NA_VHALF_NEG
     na_vhalf2: float = NA_VHALF_NEG
+    gM1: float = 0.0
+    gM2: float = 0.0
+    IM0_1: float = 0.0
+    IM0_2: float = 0.0
+
+    @property
+    def has_m(self) -> bool:
+        """Whether the M current is on: the state then has u1 and u2."""
+        return self.gM1 != 0.0 or self.gM2 != 0.0
 
 
 def _fraction(name: str, x: float) -> None:
@@ -171,8 +186,11 @@ def _check_knobs(
     area_ratio: float | None,
     gNa2: float | None,
     na_vhalf: tuple[float, float],
+    m: tuple | None = None,
 ) -> None:
     """Rejects free-coupling arguments no cell could have.
+
+    m, if given, is _check_m's arguments, checked with the rest.
 
     The fractions are checked where get_params has applied model_type,
     since only the active channels share the resting conductance.
@@ -197,6 +215,8 @@ def _check_knobs(
     ):
         if v is None or not np.isfinite(v):
             raise ValueError(f"{name} must be finite, got {v}")
+    if m is not None:
+        _check_m(*m)
 
 
 def _klt_to_leak(
@@ -364,6 +384,91 @@ def _somatic_leak(shares: float, gKHT: float, gTot1: float, Vr: float) -> float:
     return glk1
 
 
+def _check_m(
+    gM1: float | None,
+    gM2: float | None,
+    axon_scales: tuple[float, float],
+    swap: bool,
+    klt_to_leak: str | None,
+) -> None:
+    """Rejects get_params's M and axon-scale arguments (#85).
+
+    Raises:
+        ValueError: For a gM that is negative or not finite, a scale
+            that is not finite and > 0, or a KLT swap with klt_to_leak.
+    """
+    for name, g in (("gM1", gM1), ("gM2", gM2)):
+        if g is not None:
+            _finite(name, g, ">= 0")
+    for name, x in zip(
+        ("axon_cap_scale", "axon_leak_scale"), axon_scales, strict=True
+    ):
+        _finite(name, x, "> 0")
+    if swap and klt_to_leak:
+        raise ValueError(
+            "pass klt_to_m / soma_klt_to_m or klt_to_leak, not both"
+        )
+
+
+def _m_channel(
+    has_klt: bool,
+    swap: bool,
+    gKLT: float,
+    IKLT0: float,
+    gM: float | None,
+) -> tuple[float, float, float]:
+    """Resolves one compartment's KLT and M conductances (#85).
+
+    Args:
+        has_klt: Whether model_type has KLT (and so M).
+        swap: Replace the compartment's KLT by M.
+        gKLT: Its KLT conductance [nS].
+        IKLT0: Its resting KLT current [pA].
+        gM: The M conductance asked for [nS]; None: 0, or gKLT's value
+            when swapping.
+
+    Returns:
+        (gKLT, IKLT0, gM): KLT's two zeroed by a swap, and gM.
+    """
+    if not has_klt:
+        return gKLT, IKLT0, 0.0
+    if swap:
+        return 0.0, 0.0, float(gKLT if gM is None else gM)
+    return gKLT, IKLT0, float(gM or 0.0)
+
+
+def _klt_and_m(
+    model_type: str,
+    swaps: tuple[bool, bool],
+    klt: tuple[float, float, float, float],
+    gM: tuple[float | None, float | None],
+    Vr: float,
+    EK: float,
+) -> dict[str, float]:
+    """Returns TwoCptParams's KLT and M fields (#85).
+
+    Args:
+        model_type: The channel set; only those with KLT have M.
+        swaps: (soma_klt_to_m, klt_to_m).
+        klt: (gKLT1, IKLT0_1, gKLT2, IKLT0_2) before any swap.
+        gM: (gM1, gM2) as asked for.
+        Vr: The resting potential [mV].
+        EK: The K reversal potential [mV].
+
+    Returns:
+        gKLT1, IKLT0_1, gKLT2, IKLT0_2, gM1, gM2, IM0_1 and IM0_2.
+    """
+    has_klt = model_type in ("active-KLT", "active-full", "active-KLT+H")
+    out = {}
+    for k, swap, (g_in, i_in), m_in in zip(
+        "12", swaps, (klt[:2], klt[2:]), gM, strict=True
+    ):
+        g, i0, m = _m_channel(has_klt, swap, g_in, i_in, m_in)
+        out |= {f"gKLT{k}": g, f"IKLT0_{k}": i0, f"gM{k}": m}
+        out[f"IM0_{k}"] = m * C.uinf(Vr) * (Vr - EK)
+    return out
+
+
 def get_params(
     v0: float,
     node: int,
@@ -386,6 +491,12 @@ def get_params(
     soma_na_vhalf: float = NA_VHALF,
     axon_na_vhalf: float = NA_VHALF,
     klt_to_leak: str | None = None,
+    gM1: float | None = None,
+    gM2: float | None = None,
+    klt_to_m: bool = False,
+    axon_cap_scale: float = 1.0,
+    axon_leak_scale: float = 1.0,
+    soma_klt_to_m: bool = False,
 ) -> TwoCptParams:
     """Ports getParam: the two-compartment parameters.
 
@@ -436,6 +547,23 @@ def get_params(
             that keeps the rest potential (see two_cpt): gKLT1 and gKLT2
             become 0 and glk1 and glk2 grow by the added conductance.
             None (default) keeps KLT; "chord" or "slope".
+        gM1: Somatic M-type (Kv7) K conductance [nS], >= 0 (default: 0,
+            no M current). The gate is constants.uinf / tauu (km.mod's,
+            an inference: see constants.py); its resting current is
+            subtracted as every other's, so rest stays at v0. Only the
+            model types with KLT have it: in the others it is 0.
+        gM2: The same for the axon compartment.
+        klt_to_m: Replace the axon compartment's KLT by M, as Jing et al
+            2025's deprivation scenario: gKLT2 becomes 0 and gM2, unless
+            given, takes gKLT2's maximal conductance; the leak keeps its
+            value (the KLT's resting share does not move into it, unlike
+            klt_to_leak). The soma keeps its KLT unless soma_klt_to_m.
+        axon_cap_scale: Multiplies the axon compartment's capacitance
+            (1.5 in that scenario: "AIS capacitance +50%").
+        axon_leak_scale: Multiplies its leak conductance (1.5 there).
+            The leak reverses at v0 (Elk), so rest does not move.
+        soma_klt_to_m: The same swap at the soma: gKLT1 becomes 0 and
+            gM1, unless given, takes its maximal conductance.
 
     Returns:
         A TwoCptParams with TwoCpt.m's field names.
@@ -446,7 +574,9 @@ def get_params(
             for a v0 that is not finite, an r1 or tau_est that is not
             finite and > 0, for gC together with a non-default r1, for
             klt_to_leak not None, "chord" or "slope", or "slope" at a
-            v0 where KLT has no positive slope conductance.
+            v0 where KLT has no positive slope conductance, a gM that is
+            negative or not finite, klt_to_m with klt_to_leak, or an
+            axon scale that is not finite and > 0.
     """
     if klt_to_leak not in (None, "chord", "slope"):
         raise ValueError(
@@ -459,6 +589,13 @@ def get_params(
         area_ratio,
         gNa2,
         (soma_na_vhalf, axon_na_vhalf),
+        m=(
+            gM1,
+            gM2,
+            (axon_cap_scale, axon_leak_scale),
+            klt_to_m or soma_klt_to_m,
+            klt_to_leak,
+        ),
     )
     # every conductance and capacitance below is a multiple of 1 / r1 and
     # tau_est, so a zero or an infinity in either leaves nothing to run
@@ -493,7 +630,8 @@ def get_params(
     tau1 = tau_est * (1 - couple12 * couple21)
     tau2 = tau1 * area_ratio * (couple12 / couple21)
     cap1 = tau1 * (gTot1 + gC)
-    cap2 = tau2 * (gTot2 + gC)
+    # x * 1.0 == x: the default scales leave every bit
+    cap2 = tau2 * (gTot2 + gC) * axon_cap_scale
 
     Vr = Vrest
     gKLT1 = klt1 * gTot1 / (C.winf(Vr) ** 4 * C.zinf(Vr))
@@ -503,7 +641,7 @@ def get_params(
     gh2 = h2 * gTot2 / C.ainf(Vr)
     gKHT = _somatic_kht(model_type, gKHT, gTot1, Vr)
     glk1 = _somatic_leak(klt1 + h1 + na1, gKHT, gTot1, Vr)
-    glk2 = (1 - klt2 - h2) * gTot2
+    glk2 = (1 - klt2 - h2) * gTot2 * axon_leak_scale
     # calibrated at the default V-half whatever soma_na_vhalf is
     gNa1 = na1 * gTot1 / C.na_open(C.minf(Vr), C.hinf(Vr))
     ENa = 69.0
@@ -537,8 +675,6 @@ def get_params(
         tau2=tau2,
         cap1=cap1,
         cap2=cap2,
-        gKLT1=gKLT1,
-        gKLT2=gKLT2,
         Vh=Vh,
         gh1=gh1,
         gh2=gh2,
@@ -549,14 +685,21 @@ def get_params(
         IappLoc=1 if input_node == 1 else 2,
         INa0_1=gNa1 * na_rest1,
         INa0_2=gNa2 * na_rest2,
-        IKLT0_1=IKLT0_1,
-        IKLT0_2=IKLT0_2,
         Ih0_1=gh1 * h_rest,
         IKHT0=gKHT * C.pinf(Vr) * (Vr - VK),
         Ih0_2=gh2 * h_rest,
         z_rest=C.zinf(Vr),  # z is frozen at rest in this model
         na_vhalf1=na_vhalf1,
         na_vhalf2=na_vhalf2,
+        # the KLT and M fields; M only where model_type has KLT (#85)
+        **_klt_and_m(
+            model_type,
+            (soma_klt_to_m, klt_to_m),
+            (gKLT1, IKLT0_1, gKLT2, IKLT0_2),
+            (gM1, gM2),
+            Vr,
+            EK,
+        ),
     )
 
 
@@ -677,7 +820,7 @@ def _dv(
     Returns:
         [dV1/dt, dV2/dt] [mV/ms].
     """
-    V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x
+    V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x[:11]
     z = P.z_rest
     IKHT = P.gKHT * p * (V1 - P.VK) - P.IKHT0
     INa1 = C.na_open(m1, h1, P.gNa1) * (V1 - P.ENa) - P.INa0_1
@@ -694,6 +837,14 @@ def _dv(
     else:
         Iapp = applied_current(t, V1, stim_type, s)
         Iapp1, Iapp2 = (Iapp, 0.0) if P.IappLoc == 1 else (0.0, Iapp)
+    if P.has_m:
+        u1, u2 = x[11], x[12]
+        IM1 = P.gM1 * u1 * (V1 - P.EK) - P.IM0_1
+        IM2 = P.gM2 * u2 * (V2 - P.EK) - P.IM0_2
+        return [
+            (-Ilk1 - IKLT1 - IC + Iapp1 - INa1 - Ih1 - IKHT - IM1) / P.cap1,
+            (-Ilk2 - IKLT2 + IC + Iapp2 - INa2 - Ih2 - IM2) / P.cap2,
+        ]
     return [
         (-Ilk1 - IKLT1 - IC + Iapp1 - INa1 - Ih1 - IKHT) / P.cap1,
         (-Ilk2 - IKLT2 + IC + Iapp2 - INa2 - Ih2) / P.cap2,
@@ -711,7 +862,7 @@ def _rhs(
 
     Compartment 1 is the soma, 2 the axon node; currents in pA.
     """
-    V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x
+    V1, V2, w1, h1, w2, m1, m2, h2, p, a1, a2 = x[:11]
     z = P.z_rest  # KLT inactivation is frozen at rest in this model
 
     # soma: KHT exists only here. Na, KLT, h and KHT have their value at rest
@@ -735,11 +886,28 @@ def _rhs(
         Iapp = applied_current(t, V1, stim_type, s)
         Iapp1, Iapp2 = (Iapp, 0.0) if P.IappLoc == 1 else (0.0, Iapp)
 
+    if P.has_m:
+        # M-type K (#85): subtracted at rest as the others, and last, so a
+        # run without it keeps every bit
+        u1, u2 = x[11], x[12]
+        IM1 = P.gM1 * u1 * (V1 - P.EK) - P.IM0_1
+        IM2 = P.gM2 * u2 * (V2 - P.EK) - P.IM0_2
+        dV1 = (-Ilk1 - IKLT1 - IC + Iapp1 - INa1 - Ih1 - IKHT - IM1) / P.cap1
+        dV2 = (-Ilk2 - IKLT2 + IC + Iapp2 - INa2 - Ih2 - IM2) / P.cap2
+        tail = [
+            (C.uinf(V1) - u1) / C.tauu(V1),
+            (C.uinf(V2) - u2) / C.tauu(V2),
+        ]
+    else:
+        dV1 = (-Ilk1 - IKLT1 - IC + Iapp1 - INa1 - Ih1 - IKHT) / P.cap1
+        dV2 = (-Ilk2 - IKLT2 + IC + Iapp2 - INa2 - Ih2) / P.cap2
+        tail = []
+
     # same order as the state vector; the gates relax to steady state with the
     # shared time constants in constants.py
     return [
-        (-Ilk1 - IKLT1 - IC + Iapp1 - INa1 - Ih1 - IKHT) / P.cap1,
-        (-Ilk2 - IKLT2 + IC + Iapp2 - INa2 - Ih2) / P.cap2,
+        dV1,
+        dV2,
         (C.winf(V1) - w1) / C.tauw(V1),
         (C.hinf(V1, P.na_vhalf1) - h1) / C.tauh(V1),
         (C.winf(V2) - w2) / C.tauw(V2),
@@ -749,6 +917,7 @@ def _rhs(
         (C.pinf(V1) - p) / C.taup(V1),
         (C.ainf(V1) - a1) / C.taua(V1),
         (C.ainf(V2) - a2) / C.taua(V2),
+        *tail,
     ]
 
 
@@ -763,9 +932,11 @@ def initial_state(P: TwoCptParams) -> np.ndarray:
         P: The parameters (get_params); Vrest is the v0 of the run.
 
     Returns:
-        The 11 states in the module docstring's order.
+        The 11 states in the module docstring's order (13 with the M
+        current, u1 and u2 at their steady state too).
     """
     Vr = P.Vrest
+    u = [C.uinf(Vr)] * 2 if P.has_m else []
     return np.array(
         [
             Vr,
@@ -779,6 +950,7 @@ def initial_state(P: TwoCptParams) -> np.ndarray:
             C.pinf(Vr),
             C.ainf(Vr),
             C.ainf(Vr),
+            *u,
         ],
         dtype=float,
     )
@@ -873,6 +1045,12 @@ def two_cpt(
     axon_na_vhalf: float = NA_VHALF,
     klt_to_leak: str | None = None,
     mode: str | None = None,
+    gM1: float | None = None,
+    gM2: float | None = None,
+    klt_to_m: bool = False,
+    axon_cap_scale: float = 1.0,
+    axon_leak_scale: float = 1.0,
+    soma_klt_to_m: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Runs the two-compartment model.
 
@@ -972,10 +1150,18 @@ def two_cpt(
             under the Rust BDF integrator. None (default): MSOAXON_MODE
             if set, else "native" with the extension and "exact" without
             it, as in mso_axon. See _fast.
+        gM1: Somatic M-type K conductance [nS] (#85; see get_params).
+        gM2: The axon compartment's.
+        klt_to_m: Swap the axon compartment's KLT for M (get_params).
+        axon_cap_scale: Multiplies the axon compartment's capacitance.
+        axon_leak_scale: Multiplies its leak conductance. With
+            klt_to_m, 1.5 and 1.5 are Jing et al 2025's deprivation
+            scenario (scripts/kv7_deprivation.py).
+        soma_klt_to_m: Swap the soma's KLT for M too (get_params).
 
     Returns:
-        (t, x) with x shaped (n_times, 11); see the module docstring for
-        the state layout.
+        (t, x) with x shaped (n_times, 11), or (n_times, 13) with the M
+        current; see the module docstring for the state layout.
 
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
@@ -1023,6 +1209,12 @@ def two_cpt(
         soma_na_vhalf=soma_na_vhalf,
         axon_na_vhalf=axon_na_vhalf,
         klt_to_leak=klt_to_leak,
+        gM1=gM1,
+        gM2=gM2,
+        klt_to_m=klt_to_m,
+        axon_cap_scale=axon_cap_scale,
+        axon_leak_scale=axon_leak_scale,
+        soma_klt_to_m=soma_klt_to_m,
     )
     s = _common.stimulus(stim_type, start, stop, I, t_end, syn)
     if stim_type == "Events":
