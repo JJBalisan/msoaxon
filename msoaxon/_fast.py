@@ -248,6 +248,14 @@ _GATING = {
     "taua_a": 417.0,
     "taua_v": 61.5,
     "taua_k": 800.0,
+    # uinf: 1 / (1 + exp(-(V + 30) / 9)) (M-type K, #85)
+    "uinf_v": 30.0,
+    "uinf_k": 9.0,
+    # tauu: _U_TEMP * (d / (0.001 x (2 - d))), x = |V + 30|,
+    # d = -expm1(-x / 9); _U_TEMP / (2 0.001 9) at x = 0
+    "tauu_r": 0.001,
+    "tauu_v": 30.0,
+    "tauu_k": 9.0,
 }
 
 
@@ -263,8 +271,8 @@ def _gating(mem: 'multi.Membrane | None' = None) -> dict[str, float]:
     takes, so they reach the Rust side with no code of its own, in the
     same float order as constants.py's functions: q multiplies taum's and
     tauh's divisor and divides taup's and taua's temperature factor and
-    tauw's and tauz's numerator and constant (x / 1.0 == x, so the default
-    changes no bit).
+    tauw's and tauz's numerator and constant, and divides tauu's
+    temperature factor (x / 1.0 == x, so the default changes no bit).
 
     Args:
         mem: The channel overrides; None: the defaults.
@@ -279,6 +287,7 @@ def _gating(mem: 'multi.Membrane | None' = None) -> dict[str, float]:
         "v_h": float(multi.V_H),
         "taup_temp": float(constants._P_TEMP),
         "taua_temp": float(constants._A_TEMP),
+        "tauu_temp": float(constants._U_TEMP),
         **_GATING,
     }
     if mem is None:
@@ -294,6 +303,7 @@ def _gating(mem: 'multi.Membrane | None' = None) -> dict[str, float]:
             gating[name] *= q
     gating["taup_temp"] /= q
     gating["taua_temp"] /= qa
+    gating["tauu_temp"] /= q
     for name in ("tauw_num", "tauw_c", "tauz_num", "tauz_c"):
         if name in gating:
             gating[name] /= q
@@ -500,6 +510,7 @@ def _build(
         child=np.asarray(morph.child, dtype=np.int64),
         active=tuple(bool(a) for a in active),
         gating=_gating(mem),
+        g_m=None if mem.g_m is None else _f64(mem.g_m),
         **stim,
     )
 

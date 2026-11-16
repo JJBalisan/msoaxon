@@ -32,6 +32,7 @@ PROBE = (
         "na_availability.py",
         "phase0_harness.py",
         "coupling_plane.py",
+        "kv7_deprivation.py",
     ],
 )
 def test_analysis_scripts_import_without_matplotlib(script):

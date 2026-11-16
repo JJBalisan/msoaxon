@@ -78,10 +78,12 @@ impl MultiRhs {
     /// every name declared in `Gating` to its value (`_fast._gating()`).
     /// "Events" takes its table as the `ev_*` arrays, one entry per event
     /// (`synaptic.event_arrays`; `ev_k` 0-based), with `amp` the run's `I`.
+    /// `g_m` is the M-type K density per compartment (`Membrane.g_m`), or
+    /// None: no M current, and the state is 7n long instead of 8n.
     #[new]
     #[pyo3(signature = (
         *, g_na, g_kht, g_klt, g_h, g_lk, vlk, na_vhalf, cap, sa, g_ax,
-        parent, child, active, gating, stim_type, start=0.0,
+        parent, child, active, gating, stim_type, g_m=None, start=0.0,
         stop=0.0, amp=0.0, k=0, k2=0, f=0.0, epsg=(1.0, 1.0, 1.0),
         t_syn=None, g_syn=None, vsyn=0.0, diff=None, ev_t=None, ev_k=None,
         ev_g=None, ev_rise=None, ev_decay=None, ev_inv_peak=None, ev_e_rev=None
@@ -103,6 +105,7 @@ impl MultiRhs {
         active: [bool; 6],
         gating: HashMap<String, f64>,
         stim_type: &str,
+        g_m: Option<PyReadonlyArray1<'_, f64>>,
         start: f64,
         stop: f64,
         amp: f64,
@@ -138,6 +141,7 @@ impl MultiRhs {
             child: child.as_array().to_vec(),
             active,
             gating: core::Gating::from_map(&gating)?,
+            g_m: g_m.as_ref().map(to_vec),
         };
         let spec = core::StimSpec {
             stim_type: stim_type.to_string(),
@@ -159,7 +163,8 @@ impl MultiRhs {
         })
     }
 
-    /// Returns dx/dt at time t for the state x (length 7n) as a new array.
+    /// Returns dx/dt at time t for the state x (length 7n, 8n with the M
+    /// gate) as a new array.
     ///
     /// A contiguous x is read in place; a strided view (scipy's num_jac
     /// passes columns of a 2-D array) is copied first.
@@ -170,10 +175,10 @@ impl MultiRhs {
         x: PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let len = x.len()?;
-        if len != 7 * self.inner.n() {
+        if len != self.inner.nstates() {
             return Err(PyValueError::new_err(format!(
                 "x has {len} entries, expected {}",
-                7 * self.inner.n()
+                self.inner.nstates()
             )));
         }
         let mut out = vec![0.0f64; len];
@@ -281,7 +286,8 @@ impl TwoCptRhs {
         })
     }
 
-    /// Returns dx/dt at time t for the state x (length 11) as a new array.
+    /// Returns dx/dt at time t for the state x (length 11, 13 with the
+    /// M gates) as a new array.
     fn __call__<'py>(
         &self,
         py: Python<'py>,
@@ -289,10 +295,10 @@ impl TwoCptRhs {
         x: PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let len = x.len()?;
-        if len != two::NSTATES {
+        if len != self.inner.nstates() {
             return Err(PyValueError::new_err(format!(
                 "x has {len} entries, expected {}",
-                two::NSTATES
+                self.inner.nstates()
             )));
         }
         let mut out = vec![0.0f64; len];

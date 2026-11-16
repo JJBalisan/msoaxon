@@ -38,7 +38,7 @@ use diffsol::{
 };
 use diffsol_la::{LinearOp, LinearSolver as LaLinearSolver};
 
-use crate::core::{tree_jac_sparsity, CoreError, MultiRhs};
+use crate::core::{tree_jac_sparsity_gates, CoreError, MultiRhs};
 use crate::two::TwoCptRhs;
 
 type M = FaerSparseMat<f64>;
@@ -67,7 +67,7 @@ pub trait Model: Clone + Send + 'static {
 impl Model for MultiRhs {
     type Ls = TreeLu;
     fn nstates(&self) -> usize {
-        7 * self.n()
+        MultiRhs::nstates(self)
     }
     fn nv(&self) -> usize {
         self.n()
@@ -80,7 +80,7 @@ impl Model for MultiRhs {
     }
     fn pattern(&self) -> (Vec<usize>, Vec<usize>) {
         let (parent, child) = self.edges();
-        tree_jac_sparsity(self.n(), parent, child)
+        tree_jac_sparsity_gates(self.n(), parent, child, self.gates())
     }
 }
 
@@ -89,7 +89,7 @@ impl Model for MultiRhs {
 impl Model for TwoCptRhs {
     type Ls = FaerSparseLU<f64>;
     fn nstates(&self) -> usize {
-        crate::two::NSTATES
+        TwoCptRhs::nstates(self)
     }
     fn nv(&self) -> usize {
         2
@@ -357,13 +357,15 @@ pub fn tree_lu_fallbacks() -> usize {
 /// The structure of I - cJ read off its pattern, and one factorisation.
 struct Tree {
     n: usize,
+    /// Gates per compartment: 6, or 7 with the M gate.
+    ng: usize,
     /// The V tree: every node's parent (ROOT for a root) and a
     /// breadth-first order (every parent before its children).
     parent: Vec<usize>,
     order: Vec<usize>,
     /// For every stored entry, in CSC order, where its value goes in `m`.
     slot: Vec<usize>,
-    /// The entries: diag (n), d (6n), e (6n), f (6n), up (n), down (n),
+    /// The entries: diag (n), d (ng n), e (ng n), f (ng n), up (n), down (n),
     /// with d = A[g, g], e = A[g, V_i] and f = A[V_i, g] for gate g of
     /// compartment i, and up[i] = A[V_p, V_i], down[i] = A[V_i, V_p] for
     /// i's parent p (both 0 at a root).
@@ -377,14 +379,21 @@ struct Tree {
 
 impl Tree {
     /// Reads the structure off `a`'s pattern: None unless it is exactly
-    /// msoaxon's (`core::tree_jac_sparsity` of a forest, with every
-    /// diagonal stored), every stored entry accounted for once.
+    /// msoaxon's (`core::tree_jac_sparsity_gates` of a forest with 6 or 7
+    /// gates, every diagonal stored), every stored entry accounted for
+    /// once.
     fn new(a: M) -> Option<Self> {
+        // 6 first: a state length that both divide is tried as msoaxon's
+        // own layout before the M gate's
+        Self::with_gates(a.clone(), 6).or_else(|| Self::with_gates(a, 7))
+    }
+
+    fn with_gates(a: M, ng: usize) -> Option<Self> {
         let nstates = a.nrows();
-        if nstates == 0 || !nstates.is_multiple_of(7) || a.ncols() != nstates {
+        if nstates == 0 || !nstates.is_multiple_of(ng + 1) || a.ncols() != nstates {
             return None;
         }
-        let n = nstates / 7;
+        let n = nstates / (ng + 1);
         let entries: Vec<(usize, usize)> = a.triplet_iter().0.collect();
         let mut nbrs = vec![Vec::new(); n];
         for &(r, c) in &entries {
@@ -418,9 +427,10 @@ impl Tree {
                 }
             }
         }
-        let (dg, eg, fg, up, down) = (n, 7 * n, 13 * n, 19 * n, 20 * n);
+        let (dg, eg, fg) = (n, (1 + ng) * n, (1 + 2 * ng) * n);
+        let (up, down, len) = ((1 + 3 * ng) * n, (2 + 3 * ng) * n, (3 + 3 * ng) * n);
         let mut slot = Vec::with_capacity(entries.len());
-        let mut hit = vec![false; 21 * n];
+        let mut hit = vec![false; len];
         for &(r, c) in &entries {
             let s = match (r < n, c < n) {
                 (true, true) if r == c => r,
@@ -442,11 +452,12 @@ impl Tree {
         }
         Some(Self {
             n,
+            ng,
             parent,
             order,
             slot,
-            m: vec![0.0; 21 * n],
-            rd: vec![0.0; 6 * n],
+            m: vec![0.0; len],
+            rd: vec![0.0; ng * n],
             piv: vec![0.0; n],
             a,
         })
@@ -455,20 +466,20 @@ impl Tree {
     /// Factorises the values in `self.a`: false if a gate or tree pivot is
     /// zero, not finite or under the floor.
     fn factor(&mut self) -> bool {
-        let n = self.n;
+        let (n, ng) = (self.n, self.ng);
         self.m.fill(0.0);
         for (&s, v) in self.slot.iter().zip(self.a.triplet_iter().1) {
             self.m[s] = v;
         }
         let (diag, rest) = self.m.split_at(n);
-        let (d, rest) = rest.split_at(6 * n);
-        let (e, rest) = rest.split_at(6 * n);
-        let (f, rest) = rest.split_at(6 * n);
+        let (d, rest) = rest.split_at(ng * n);
+        let (e, rest) = rest.split_at(ng * n);
+        let (f, rest) = rest.split_at(ng * n);
         let (up, down) = rest.split_at(n);
         let s = &mut self.piv;
         s.copy_from_slice(diag);
         // each gate's row eliminates on its own, into its V's diagonal
-        for g in 0..6 * n {
+        for g in 0..ng * n {
             if !(d[g] != 0.0 && d[g].is_finite()) {
                 return false;
             }
@@ -490,10 +501,10 @@ impl Tree {
 
     /// Solves A x = b, or A^T x = b, in place.
     fn solve(&self, b: &mut [f64], transpose: bool) {
-        let n = self.n;
-        let (_, rest) = self.m.split_at(7 * n);
-        let (e, rest) = rest.split_at(6 * n);
-        let (f, rest) = rest.split_at(6 * n);
+        let (n, ng) = (self.n, self.ng);
+        let (_, rest) = self.m.split_at((1 + ng) * n);
+        let (e, rest) = rest.split_at(ng * n);
+        let (f, rest) = rest.split_at(ng * n);
         let (up, down) = rest.split_at(n);
         // A^T swaps e with f and up with down, with the same pivots
         let (e, f, up, down) = if transpose {
@@ -502,7 +513,7 @@ impl Tree {
             (e, f, up, down)
         };
         let (bv, bg) = b.split_at_mut(n);
-        for g in 0..6 * n {
+        for g in 0..ng * n {
             bv[g % n] -= f[g] * self.rd[g] * bg[g];
         }
         for &i in self.order.iter().rev() {
@@ -516,7 +527,7 @@ impl Tree {
             let coupled = if p == ROOT { 0.0 } else { down[i] * bv[p] };
             bv[i] = (bv[i] - coupled) / self.piv[i];
         }
-        for g in 0..6 * n {
+        for g in 0..ng * n {
             bg[g] = self.rd[g] * (bg[g] - e[g] * bv[g % n]);
         }
     }
@@ -795,6 +806,7 @@ impl<R: Model> Integrator<R> {
 mod tests {
     use super::*;
     use crate::core::tests::{model, state, step_model, synaptic_model};
+    use crate::core::tree_jac_sparsity;
 
     const N: usize = 7 * 45;
     const TOL: f64 = 1e-8;
@@ -1175,10 +1187,11 @@ mod tests {
     /// I - cJ of `rhs` at (t, x), on the pattern's entries plus `extra`
     /// (each 0.25), as the operator diffsol hands over.
     fn newton_matrix(rhs: MultiRhs, x: &[f64], t: f64, c: f64, extra: &[(usize, usize)]) -> Fixed {
+        let ns = rhs.nstates();
         let it = Integrator::new(rhs).unwrap();
         let eqn = &it.problem.eqn;
         let ctx = eqn.ctx;
-        let mut jac = M::new_from_sparsity(N, N, Some(eqn.sparsity.clone()), ctx);
+        let mut jac = M::new_from_sparsity(ns, ns, Some(eqn.sparsity.clone()), ctx);
         Rhs(eqn).jacobian_inplace(&V::from_slice(x, ctx), t, &mut jac);
         let (idx, vals) = jac.triplet_iter();
         let mut pairs: Vec<(usize, usize)> = idx.collect();
@@ -1191,9 +1204,10 @@ mod tests {
             pairs.push(p);
             values.push(0.25);
         }
-        let a = M::try_from_triplets(N, N, pairs.clone(), values, ctx).unwrap();
+        let a = M::try_from_triplets(ns, ns, pairs.clone(), values, ctx).unwrap();
         let sparsity =
-            <<M as Matrix>::Sparsity as MatrixSparsity<M>>::try_from_indices(N, N, pairs).unwrap();
+            <<M as Matrix>::Sparsity as MatrixSparsity<M>>::try_from_indices(ns, ns, pairs)
+                .unwrap();
         Fixed(a, sparsity, ctx)
     }
 
@@ -1207,7 +1221,7 @@ mod tests {
         faer.set_sparsity(op);
         faer.set_linearisation(op);
         // a fixed b with entries of both signs and several magnitudes
-        let b: Vec<f64> = (0..N)
+        let b: Vec<f64> = (0..op.0.nrows())
             .map(|k| ((k * 7919) % 101) as f64 / 7.0 - 7.0)
             .collect();
         let solve = |transpose: bool, by_tree: bool| {
@@ -1261,6 +1275,106 @@ mod tests {
                 assert!(rel_diff(&tree_t, &faer_t) < 1e-12, "c = {c}: transposed");
             }
         }
+    }
+
+    #[test]
+    fn the_tree_solve_takes_the_m_gate_and_matches_faer() {
+        // 8 blocks (#85): the tree reads its seventh gate off the pattern
+        use crate::core::tests::m_params;
+        use crate::core::StimSpec;
+        let rhs = MultiRhs::new(m_params(false), &StimSpec::default()).unwrap();
+        let mut x = state();
+        x.extend((0..45).map(|i| 0.02 + 0.01 * i as f64));
+        for c in [1e-4, 1e-2, 0.3] {
+            let op = newton_matrix(rhs.clone(), &x, 1.0, c, &[]);
+            let ([tree, faer, tree_t, faer_t], used_faer) = both_solves(&op);
+            assert!(!used_faer, "fell back at c = {c}");
+            assert!(rel_diff(&tree, &faer) < 1e-12, "c = {c}");
+            assert!(rel_diff(&tree_t, &faer_t) < 1e-12, "c = {c}: transposed");
+        }
+    }
+
+    /// A chain of `n` compartments in the pattern of `model()` (soma, two
+    /// AIS, then internode/node pairs), with an M current when `with_m`.
+    fn chain_params(n: usize, with_m: bool) -> crate::core::Params {
+        let per = |soma: f64, ais: f64, inter: f64, node: f64| -> Vec<f64> {
+            (0..n)
+                .map(|i| match i {
+                    0 => soma,
+                    1 | 2 => ais,
+                    i if i % 2 == 1 => inter,
+                    _ => node,
+                })
+                .collect()
+        };
+        let mut p = crate::core::tests::model_params();
+        p.g_na = per(0.2, 4.0, 0.0, 4.0);
+        p.g_kht = per(0.1, 0.0, 0.0, 0.0);
+        p.g_klt = per(1.55, 1.55, 0.0, 1.55);
+        p.g_h = per(0.02, 0.02, 0.0, 0.0);
+        p.g_lk = per(0.0005, 0.0005, 0.0002, 0.05);
+        p.vlk = (0..n).map(|i| -65.0 - 0.05 * i as f64).collect();
+        p.na_vhalf = vec![62.5; n];
+        p.cap = (0..n).map(|i| 1.0 + 0.01 * i as f64).collect();
+        p.sa = per(8750.0, 200.0, 207.3, 2.07);
+        p.g_ax = (0..n - 1)
+            .map(|e| 2.0e-8 * (1.0 + 0.05 * e as f64))
+            .collect();
+        p.parent = (0..n as i64 - 1).collect();
+        p.child = (1..n as i64).collect();
+        p.g_m = with_m.then(|| per(0.05, 1.55, 0.0, 0.8));
+        p
+    }
+
+    #[test]
+    fn the_tree_reads_its_gate_count_when_both_divide_the_state() {
+        // 8 n is a multiple of 7 for n = 49 and 56, and 7 n of 8 for
+        // n = 56: the tree must still find 7 gates with M and 6 without,
+        // and solve as faer does (finding 6 of #176's first review)
+        use crate::core::StimSpec;
+        for (n, with_m) in [(49, true), (56, true), (56, false), (48, false)] {
+            let rhs = MultiRhs::new(chain_params(n, with_m), &StimSpec::default()).unwrap();
+            let ng = if with_m { 7 } else { 6 };
+            assert_eq!(rhs.nstates(), (ng + 1) * n);
+            let x: Vec<f64> = (0..rhs.nstates())
+                .map(|j| {
+                    if j < n {
+                        -75.0 + 0.7 * (j % 45) as f64
+                    } else {
+                        0.05 + 0.9 * ((j * 37 % 101) as f64 / 100.0)
+                    }
+                })
+                .collect();
+            for c in [1e-4, 1e-2, 0.3] {
+                let op = newton_matrix(rhs.clone(), &x, 1.0, c, &[]);
+                let mut lu = TreeLu::default();
+                lu.set_sparsity(&op);
+                let tree = lu.tree.as_ref().expect("the pattern is a tree");
+                assert_eq!((tree.n, tree.ng), (n, ng), "n = {n}, M {with_m}");
+                let ([tree, faer, tree_t, faer_t], used_faer) = both_solves(&op);
+                assert!(!used_faer, "n = {n}, M {with_m}: fell back at c = {c}");
+                assert!(rel_diff(&tree, &faer) < 1e-12, "n = {n}, c = {c}");
+                assert!(rel_diff(&tree_t, &faer_t) < 1e-12, "n = {n}, c = {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_native_run_with_the_m_gate_ends_on_t1() {
+        use crate::core::tests::m_params;
+        use crate::core::StimSpec;
+        let rhs = MultiRhs::new(m_params(false), &StimSpec::default()).unwrap();
+        let ns = rhs.nstates();
+        let mut it = Integrator::new(rhs.clone()).unwrap();
+        assert_eq!(it.nstates(), ns);
+        let mut y0 = state();
+        y0.extend((0..45).map(|_| 0.05));
+        let r = it
+            .run(&y0, 0.0, 2.0, 1e-8, 1e-8, 0.5, H0, &Events::default())
+            .unwrap();
+        assert_eq!(*r.t.last().unwrap(), 2.0);
+        assert_eq!(r.y.len(), r.t.len() * ns);
+        assert!(r.y.iter().all(|v| v.is_finite()));
     }
 
     #[test]

@@ -10,6 +10,9 @@ the voltage of MATLAB compartment k, and y[:, 225] is z1.
 Optional dendrites (with_dendrites(), Lehnert et al 2014's Fig. 8 variant) are
 appended after the axon, so compartments 1-45 keep their meaning; the state then
 has 7 blocks of n = 45 + dendrite compartments.
+
+A membrane with the M-type K current (membrane(ais_m_density=...), #85) adds an
+eighth block, its activation u, after a; without it the layout is unchanged.
 """
 
 import dataclasses
@@ -94,13 +97,13 @@ def _chain_jac_sparsity() -> sparse.csc_matrix:
 
 
 def _tree_jac_sparsity(
-    n: int, parent: np.ndarray, child: np.ndarray
+    n: int, parent: np.ndarray, child: np.ndarray, gates: int = 6
 ) -> sparse.csc_matrix:
     """Returns _chain_jac_sparsity's pattern for any tree.
 
     dV couples to its own V, to each V it shares an edge
     (parent[k], child[k]) with, and to its own gates; each gate to its
-    own V.
+    own V. `gates` is 6, or 7 with the M gate (Membrane.g_m).
     """
     I = sparse.eye(n, format="csr")
     adj = sparse.coo_matrix(
@@ -112,10 +115,36 @@ def _tree_jac_sparsity(
     )
     couple = (I + adj).tocsr()
     couple.data[:] = 1.0
-    blocks = [[couple] + [I] * 6] + [
-        [I] + [I if j == i else None for j in range(6)] for i in range(6)
+    blocks = [[couple] + [I] * gates] + [
+        [I] + [I if j == i else None for j in range(gates)]
+        for i in range(gates)
     ]
     return sparse.bmat(blocks).tocsc()
+
+
+# jac_sparsity's patterns with the M gate, by morphology (identity: eq=False)
+_M_JAC: dict[int, tuple["Morphology", sparse.csc_matrix]] = {}
+
+
+def jac_sparsity(morph: "Morphology", mem: "Membrane") -> sparse.csc_matrix:
+    """Returns the Jacobian pattern of a run on morph with mem.
+
+    morph.jac, unless mem has the M current: then the same tree with a
+    seventh gate (_tree_jac_sparsity(..., gates=7)), built once per
+    morphology.
+    """
+    if mem.g_m is None:
+        return morph.jac
+    hit = _M_JAC.get(id(morph))
+    if hit is None or hit[0] is not morph:
+        if len(_M_JAC) >= 64:
+            _M_JAC.pop(next(iter(_M_JAC)))
+        hit = (
+            morph,
+            _tree_jac_sparsity(morph.n, morph.parent, morph.child, gates=7),
+        )
+        _M_JAC[id(morph)] = hit
+    return hit[1]
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -217,6 +246,10 @@ class Membrane:
             (C.taum and the others' q); 1.0 is the model's 35 C.
         ih_rate: The rate factor of the h activation alone: rate divided
             by the Ih time-constant scale.
+        g_m: M-type (Kv7) K density per compartment [nS/um^2], or None:
+            no M current and no M gate, the state's seven blocks as
+            msoAxon.m has them. Set, the state has an eighth block, the
+            M activation u (#85).
     """
 
     key: tuple[float | bool, ...]
@@ -233,10 +266,16 @@ class Membrane:
     ih_vhalf: float = 80.4
     rate: float = 1.0
     ih_rate: float = 1.0
+    g_m: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         """Freezes the arrays (see Morphology)."""
         _freeze(self)
+
+    @property
+    def blocks(self) -> int:
+        """The state's blocks: V and the six gates, then u if g_m is set."""
+        return 7 if self.g_m is None else 8
 
 
 def _freeze(bundle: object) -> None:
@@ -1013,6 +1052,11 @@ def membrane(
     temperature: float = 35.0,
     q10: float = 3.0,
     q10_conductance: float = 2.0,
+    soma_m_density: float = 0.0,
+    ais_m_density: float = 0.0,
+    node_m_density: float = 0.0,
+    ais_cap_scale: float = 1.0,
+    ais_leak_scale: float = 1.0,
 ) -> Membrane:
     """Builds per-compartment channel overrides for the multi model.
 
@@ -1117,6 +1161,28 @@ def membrane(
         q10_conductance: The Q10 of the voltage-gated densities (default
             2, Rothman & Manis 2003's suggestion for scaling their
             conductances; also an assumption).
+        soma_m_density: M-type (Kv7) K density at the soma [nS/um^2]
+            (C.uinf, C.tauu: km.mod's gate, an inference, see
+            constants.py). 0 everywhere (default) is msoAxon.m: no M
+            current and no M gate in the state. Any density > 0 adds an
+            eighth state block, u, which evolves whenever KLT's w does
+            (model types with KLT); its density takes the Q10 of the
+            other channels (q10_conductance). Its time constant takes
+            the repo's rate factor (q10, 3 by default) away from 35 C,
+            not km.mod's own Q10 of 2.3: a choice, so that every gate
+            shares one temperature rule. At 35 C the two agree.
+            Battefeld et al 2014 (J Neurosci 34:3719) found Kv7.2/7.3
+            rising along the AIS and at nodes.
+        ais_m_density: The same in the two AIS compartments.
+        node_m_density: The same at the 21 nodes of Ranvier.
+        ais_cap_scale: Multiplies the capacitance of the AIS
+            compartments: Jing et al 2025's deprivation scenario takes
+            1.5 (their AIS capacitance and leak +50%).
+        ais_leak_scale: Multiplies the leak conductance of the AIS
+            compartments (1.5 in that scenario). Both live in the
+            morphology, so a scale other than 1 makes morph a copy with
+            its own key (as klt_to_leak does); with rebalance_rest the
+            leak reversals are built after the scaling.
 
     Returns:
         A Membrane with key, morph_key, morph, g_na, g_klt, na_vhalf,
@@ -1138,7 +1204,8 @@ def membrane(
             na_act_slope or q10 is not positive and finite, or
             ih_vhalf, na_act_vhalf or temperature is not finite, or
             temperature and q10 give a rate factor that overflows or
-            underflows to zero.
+            underflows to zero, an M density is negative or not finite,
+            or an AIS scale is not finite and > 0.
         RuntimeError: If the steady state of a rebalanced rest cannot
             be found.
 
@@ -1186,8 +1253,13 @@ def membrane(
             f"{q10_conductance} gives a factor {conductance} that is not "
             "finite and positive"
         )
-    morph = _scale_channels(
-        morph, ih_density_scale, dendrite_kht_scale, conductance
+    morph, g_m = _kv7(
+        _scale_channels(
+            morph, ih_density_scale, dendrite_kht_scale, conductance
+        ),
+        (soma_m_density, ais_m_density, node_m_density),
+        conductance,
+        (ais_cap_scale, ais_leak_scale),
     )
     na_act = (-float(na_act_vhalf), -float(na_act_slope))
     ih_vh = -float(ih_vhalf)
@@ -1215,13 +1287,25 @@ def membrane(
         V[np.isin(morph.labels, _AXON_LABELS)] = axon_rest
         # each compartment balanced on its own, as if V were uniform: exact
         # when it is (no axial current flows), else the starting guess
-        gates = _gates_at(V, na_vhalf, na_act, ih_vh)
-        vlk = V + _ionic(V, gates, morph.g_na, g_klt, morph) / morph.g_lk
+        gates = _gates_at(V, na_vhalf, na_act, ih_vh, g_m is not None)
+        vlk = V + _ionic(V, gates, morph.g_na, g_klt, morph, g_m) / morph.g_lk
         if axon_rest != v0:
             V, vlk = _solve_rest(
-                V, vlk, morph, g_klt, na_vhalf, na_act, ih_vh, rate, ih_rate
+                V,
+                vlk,
+                morph,
+                g_klt,
+                na_vhalf,
+                na_act,
+                ih_vh,
+                rate,
+                ih_rate,
+                g_m,
             )
-            gates, v_rest = _gates_at(V, na_vhalf, na_act, ih_vh), V
+            gates, v_rest = (
+                _gates_at(V, na_vhalf, na_act, ih_vh, g_m is not None),
+                V,
+            )
         y0_gates = gates
     if klt_to_leak:
         g_klt, morph, vlk = _klt_to_leak(
@@ -1265,6 +1349,20 @@ def membrane(
             float(temperature),
             float(q10),
             float(q10_conductance),
+        )
+        # the M densities only when set, so every key without them is
+        # what it was before #85 (the AIS scales are in morph.key)
+        + (
+            (
+                (
+                    "kv7",
+                    *map(
+                        float, (soma_m_density, ais_m_density, node_m_density)
+                    ),
+                ),
+            )
+            if g_m is not None
+            else ()
         ),
         morph_key=morph.key,
         morph=morph,
@@ -1279,10 +1377,76 @@ def membrane(
         ih_vhalf=ih_vh,
         rate=rate,
         ih_rate=ih_rate,
+        g_m=g_m,
     )
     if rebalance_rest:
         _warn_if_unstable(mem, float(v0), axon_rest)
     return mem
+
+
+def _kv7(
+    morph: Morphology,
+    m_density: tuple[float, float, float],
+    conductance: float,
+    ais_scales: tuple[float, float],
+) -> tuple[Morphology, np.ndarray | None]:
+    """Validates and builds membrane()'s M densities and AIS scales (#85).
+
+    Args:
+        morph: The morphology, after _scale_channels.
+        m_density: The soma's, the AIS's and the nodes' M density
+            [nS/um^2].
+        conductance: The Q10 factor of the voltage-gated densities.
+        ais_scales: The AIS capacitance and leak scales.
+
+    Returns:
+        (morph with the AIS scaled, the M density per compartment or
+        None when every density is 0).
+
+    Raises:
+        ValueError: For a density that is negative or not finite, or a
+            scale that is not finite and > 0.
+    """
+    names = ("soma_m_density", "ais_m_density", "node_m_density")
+    for name, value in zip(names, m_density, strict=True):
+        if not (math.isfinite(value) and value >= 0):
+            raise ValueError(f"{name} must be finite and >= 0, got {value}")
+    for name, value in zip(
+        ("ais_cap_scale", "ais_leak_scale"), ais_scales, strict=True
+    ):
+        if not (math.isfinite(value) and value > 0):
+            raise ValueError(f"{name} must be finite and > 0, got {value}")
+    morph = _scale_ais(morph, *map(float, ais_scales))
+    if not any(m_density):
+        return morph, None
+    labels = np.asarray(morph.labels)
+    g_m = np.zeros(morph.n)
+    g_m[0] = m_density[0]
+    g_m[labels == "AIS"] = m_density[1]
+    g_m[labels == "node"] = m_density[2]
+    return morph, g_m * conductance
+
+
+def _scale_ais(morph: Morphology, cap: float, leak: float) -> Morphology:
+    """Returns morph with the AIS capacitance and leak scaled (membrane()).
+
+    Args:
+        morph: The morphology.
+        cap: Multiplies the AIS compartments' capacitance.
+        leak: Multiplies their leak conductance.
+
+    Returns:
+        morph itself when both are 1, else a copy with its own key.
+    """
+    if cap == 1.0 and leak == 1.0:
+        return morph
+    ais = np.asarray(morph.labels) == "AIS"
+    return dataclasses.replace(
+        morph,
+        key=("ais", morph.key, cap, leak),
+        cap=np.where(ais, morph.cap * cap, morph.cap),
+        g_lk=np.where(ais, morph.g_lk * leak, morph.g_lk),
+    )
 
 
 def _gates_at(
@@ -1290,12 +1454,14 @@ def _gates_at(
     na_vhalf: np.ndarray,
     na_act: tuple[float, float] = (46.0, -11.0),
     ih_vhalf: float = 80.4,
+    with_m: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Returns the steady-state gates (m, h, p, w, z, a) at V.
 
-    na_act is (C.minf's vhalf, k) and ih_vhalf C.ainf's vhalf.
+    na_act is (C.minf's vhalf, k) and ih_vhalf C.ainf's vhalf; with_m
+    appends the M gate u.
     """
-    return (
+    gates = (
         C.minf(V, *na_act),
         C.hinf(V, na_vhalf),
         C.pinf(V),
@@ -1303,6 +1469,7 @@ def _gates_at(
         C.zinf(V),
         C.ainf(V, ih_vhalf),
     )
+    return (*gates, C.uinf(V)) if with_m else gates
 
 
 def _ionic(
@@ -1311,19 +1478,23 @@ def _ionic(
     g_na: np.ndarray,
     g_klt: np.ndarray,
     morph: Morphology,
+    g_m: np.ndarray | None = None,
 ) -> np.ndarray:
     """Returns the ionic current density but the leak [pA/um^2].
 
     In membrane()'s original float order, which the rebalanced golden
-    traces depend on.
+    traces depend on; the M current, when g_m is set, comes last.
     """
-    mi, hi, pi, wi, zi, ai = gates
-    return (
+    mi, hi, pi, wi, zi, ai = gates[:6]
+    current = (
         C.na_open(mi, hi, g_na) * (V - V_NA)
         + morph.g_kht * pi * (V - V_K)
         + g_klt * wi**4 * zi * (V - V_K)
         + morph.g_h * ai * (V - V_H)
     )
+    if g_m is not None:
+        current = current + g_m * gates[6] * (V - V_K)
+    return current
 
 
 def _solve_rest(
@@ -1336,6 +1507,7 @@ def _solve_rest(
     ih_vhalf: float = 80.4,
     rate: float = 1.0,
     ih_rate: float = 1.0,
+    g_m: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Root-finds a rebalanced rest that is not uniform.
 
@@ -1355,6 +1527,7 @@ def _solve_rest(
         ih_vhalf: Membrane.ih_vhalf.
         rate: Membrane.rate.
         ih_rate: Membrane.ih_rate.
+        g_m: Membrane.g_m.
 
     Returns:
         (V, vlk) at the steady state.
@@ -1368,7 +1541,8 @@ def _solve_rest(
         """Returns the state and a stand-in Membrane for unknowns u."""
         v = np.concatenate([[v0], u[1:]])
         lk = np.concatenate([u[:1], vlk[1:]])
-        x = np.concatenate([v, *_gates_at(v, na_vhalf, na_act, ih_vhalf)])
+        gates = _gates_at(v, na_vhalf, na_act, ih_vhalf, g_m is not None)
+        x = np.concatenate([v, *gates])
         mem = types.SimpleNamespace(
             g_na=morph.g_na,
             g_klt=g_klt,
@@ -1379,6 +1553,8 @@ def _solve_rest(
             ih_vhalf=ih_vhalf,
             rate=rate,
             ih_rate=ih_rate,
+            g_m=g_m,
+            blocks=7 if g_m is None else 8,
         )
         return x, mem
 
@@ -1439,13 +1615,13 @@ def rest_jacobian(mem: Membrane) -> tuple[np.ndarray, np.ndarray]:
         mem: The membrane.
 
     Returns:
-        (J, x): the 7n x 7n Jacobian [1/ms] and the state it is taken
-        at.
+        (J, x): the 7n x 7n Jacobian [1/ms] (8n x 8n with the M gate)
+        and the state it is taken at.
     """
     morph = mem.morph
     x = initial_state(morph, mem, mem.key[0])
     active = (True,) * 6
-    pattern = sparse.csc_matrix(morph.jac)
+    pattern = sparse.csc_matrix(jac_sparsity(morph, mem))
     J = np.zeros((x.size, x.size))
     for cols in _column_groups(pattern):
         h = 1e-6 * np.maximum(1.0, np.abs(x[cols]))
@@ -1536,13 +1712,16 @@ def _dv(
     Returns:
         dV/dt per compartment [mV/ms].
     """
-    V, m, h, p, w, z, a = x.reshape(7, morph.n)
+    blocks = x.reshape(mem.blocks, morph.n)
+    V, m, h, p, w, z, a = blocks[:7]
     INa = C.na_open(m, h, mem.g_na) * (V - V_NA)
     IKHT = morph.g_kht * p * (V - V_K)
     IKLT = mem.g_klt * w**4 * z * (V - V_K)
     Ih = morph.g_h * a * (V - V_H)
     Ilk = morph.g_lk * (V - mem.vlk)
     total = INa + IKHT + IKLT + Ih + Ilk
+    if mem.g_m is not None:  # the M current (#85), last
+        total = total + mem.g_m * blocks[7] * (V - V_K)
     if stim_type == "EPSGbilateral":
         for k, iext in bilateral_current(
             t, V, s, input_node - 1, input_node2 - 1, morph.sa
@@ -1574,9 +1753,10 @@ def _rhs(
     output array and skipping gates that are switched off.
     """
     n = morph.n
-    V, m, h, p, w, z, a = x.reshape(7, n)
+    blocks = x.reshape(mem.blocks, n)
+    V, m, h, p, w, z, a = blocks[:7]
     out = np.empty_like(x)
-    d = out.reshape(7, n)
+    d = out.reshape(mem.blocks, n)
 
     INa = C.na_open(m, h, mem.g_na) * (V - V_NA)
     IKHT = morph.g_kht * p * (V - V_K)
@@ -1588,6 +1768,10 @@ def _rhs(
     )  # leak reversal = resting potential by default
 
     total = INa + IKHT + IKLT + Ih + Ilk
+    if mem.g_m is not None:
+        # M-type K (#85), linear in u as km.mod; added last, so a membrane
+        # without it keeps every bit
+        total = total + mem.g_m * blocks[7] * (V - V_K)
     if stim_type == "EPSGbilateral":
         for k, iext in bilateral_current(
             t, V, s, input_node - 1, input_node2 - 1, morph.sa
@@ -1617,6 +1801,8 @@ def _rhs(
     d[6] = (
         (C.ainf(V, mem.ih_vhalf) - a) / C.taua(V, mem.ih_rate) if act_a else 0.0
     )
+    if mem.g_m is not None:  # u moves with KLT's w
+        d[7] = (C.uinf(V) - blocks[7]) / C.tauu(V, q) if act_w else 0.0
     return out
 
 
@@ -1635,13 +1821,15 @@ def initial_state(morph: Morphology, mem: Membrane, v0: float) -> np.ndarray:
         v0: The initial potential [mV].
 
     Returns:
-        The state vector, 7 * morph.n long, in the module docstring's
-        layout.
+        The state vector, 7 * morph.n long (8 * morph.n with the M
+        gate), in the module docstring's layout.
     """
     n = morph.n
     if mem.y0_gates is None:
+        # the M gate (Membrane.g_m) starts at its steady state at v0
+        u0 = [] if mem.g_m is None else [np.full(n, C.uinf(float(v0)))]
         return np.concatenate(
-            [np.full(n, float(v0))] + [np.full(n, g) for g in _GATE0]
+            [np.full(n, float(v0))] + [np.full(n, g) for g in _GATE0] + u0
         )
     if mem.v_rest is not None:
         return np.concatenate([mem.v_rest, *mem.y0_gates])
@@ -1729,8 +1917,9 @@ def mso_axon(
             "exact". See _fast.
 
     Returns:
-        (t, y) with y shaped (n_times, 7 * n); see the module docstring
-        for the state layout.
+        (t, y) with y shaped (n_times, 7 * n), or (n_times, 8 * n) when
+        mem has the M current (its gate u last); see the module
+        docstring for the state layout.
 
     Raises:
         ValueError: For unknown names, out-of-range compartments, a
@@ -1821,7 +2010,7 @@ def mso_axon(
         rtol=RTOL,
         atol=ATOL,
         max_step=(MAX_STEP_FRACTION * t_end if max_step is None else max_step),
-        jac_sparsity=morph.jac,
+        jac_sparsity=jac_sparsity(morph, mem),
         quiet=quiet,
         stop_event=_common._stops(
             dv, node - 1, stop_on_spike, stop_when_settled, stim_type, s

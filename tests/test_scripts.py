@@ -364,3 +364,42 @@ def test_coupling_plane_script(tmp_path):
     for p in by.values():
         assert (p["status"] == "fires") == (p["window_us"] is not None)
     assert res["extremes"]["window_min"]["status"] == "fires"
+
+
+def test_kv7_deprivation_script(tmp_path):
+    out = run_script("kv7_deprivation.py", "--quick", "--out-dir", tmp_path)
+    res = json.loads((tmp_path / "kv7_deprivation.json").read_text())
+    assert "1360 -> 500 pA" in out
+    rows = res["rows"]
+    # two: 4 calibrations x (control + 2 states x 2 gM); multi: 1 + 4;
+    # the quick sweep 2 x 2
+    assert len(rows) == 4 * 5 + 5 + 4
+    for r in rows:
+        assert math.isfinite(r["threshold_pA"]) and r["threshold_pA"] > 0
+        assert [s["multiple"] for s in r["steps"]] == res["multiples"]
+        assert r["type"] in ("phasic", "tonic", "mixed", "1 spike, block")
+        for s in r["steps"]:
+            assert 0 <= s["min_h"] <= s["end_h"] + 1e-12 <= 1 + 1e-12
+            assert s["block"] == (s["end_h"] < 0.05)
+            assert math.isfinite(s["end_v_soma_mV"])
+        if r["type"] == "phasic":  # one spike each, none in block
+            assert not any(s["block"] for s in r["steps"])
+    by = {
+        (r["model"], r["config"], r["state"], r["m_fraction"]): r
+        for r in rows
+        if r["state"] != "sweep"
+    }
+    for (model, config, state, frac), r in by.items():
+        if state == "control":
+            continue
+        control = by[(model, config, "control", None)]["threshold_pA"]
+        # less K at the soma (a tenth of KLT's conductance as M) lowers
+        # threshold; at 1x the slow M can still hold it near control
+        if state == "deprived+soma" and frac == 0.1:
+            assert r["threshold_pA"] < 0.5 * control, (model, config)
+    sweep = [r for r in rows if r["state"] == "sweep"]
+    # the sweep's (0, 0) cell is the rebalanced control
+    control = by[("multi", "LUMPED, rebalanced", "control", None)]
+    assert sweep[0]["threshold_pA"] == control["threshold_pA"]
+    # Kv7 added on top of KLT raises threshold
+    assert sweep[-1]["threshold_pA"] > sweep[0]["threshold_pA"]

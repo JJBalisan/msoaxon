@@ -624,7 +624,13 @@ true
 "taua_c": 79.0,
 "taua_a": 417.0,
 "taua_v": 61.5,
-"taua_k": 800.0
+"taua_k": 800.0,
+"uinf_v": 30.0,
+"uinf_k": 9.0,
+"tauu_temp": 0.36806675878573286,
+"tauu_r": 0.001,
+"tauu_v": 30.0,
+"tauu_k": 9.0
 },
 "stim_type": "EPSGpair",
 "start": 5.0,
@@ -1262,7 +1268,13 @@ true
 "taua_c": 79.0,
 "taua_a": 417.0,
 "taua_v": 61.5,
-"taua_k": 800.0
+"taua_k": 800.0,
+"uinf_v": 30.0,
+"uinf_k": 9.0,
+"tauu_temp": 0.36806675878573286,
+"tauu_r": 0.001,
+"tauu_v": 30.0,
+"tauu_k": 9.0
 },
 "stim_type": "none",
 "start": 5.0,

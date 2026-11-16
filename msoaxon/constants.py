@@ -248,6 +248,71 @@ def taua(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
     return (_A_TEMP / q) * (79 + 417 * np.exp(-((V + 61.5) ** 2) / 800))
 
 
+# --- M-type (Kv7) K current, off by default (#85) ----------------------------
+# Neither MATLAB model has one. The gate u is Mainen & Sejnowski 1996's
+# M-current (km.mod): a = R (V + 30) / (1 - exp(-(V + 30) / 9)), b = -R (V +
+# 30) / (1 - exp((V + 30) / 9)), R = 0.001 /ms/mV for both rates, Q10 2.3 from
+# 23 C, I_M = g u (V - E_K). With both rates equal, u_inf = a / (a + b) is
+# the Boltzmann below and a + b = R x coth(x / 18), x = V + 30.
+#
+# The choice is an inference, not a reading of Jing et al. 2025 (J Comput
+# Neurosci, doi:10.1007/s10827-025-00902-9), whose full text could not be
+# reached here: they take their M current from Kuba et al. 2015 (Nat Commun
+# 6:8815), whose Kv7 activates with V-half -30 mV and slope 9 mV, and they
+# give tau_u = 12 ms at their -58 mV rest. km.mod has that midpoint and
+# slope, and at 35 C its tau at -58 mV is 12.02 ms.
+#
+# Two departures from km.mod, both deliberate:
+# - km.mod, as both the author and the reviewer of #176 recall it (the file
+#   could not be fetched to check), also scales the conductance by its
+#   temperature factor, gk = tadj * gbar * u (x 2.72 at 35 C). Here the
+#   factor is on tau only, and the density is the caller's g as given. A gM
+#   taken from km.mod's gbar, or from a model that kept that line, is
+#   therefore 2.72 x smaller than the g it acts as there.
+# - Away from 35 C, tau_u follows the repo's rate factor q (membrane()'s
+#   q10, 3 by default), as every other gate does, not km.mod's Q10 of 2.3.
+_U_TEMP = 2.3 ** ((23 - 35) / 10)  # Q10 of 2.3 from 23 C, to 35 C
+
+
+def uinf(V: np.ndarray | float) -> np.ndarray | float:
+    """M-type K activation: km.mod's a / (a + b), a Boltzmann.
+
+    Args:
+        V: Membrane potential [mV].
+
+    Returns:
+        The steady-state open fraction (0.043 at -58 mV, 0.020 at -65).
+    """
+    return 1.0 / (1.0 + np.exp(-(V + 30.0) / 9.0))
+
+
+def tauu(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
+    """M-type K activation time constant: km.mod's 1 / (a + b), at 35 C.
+
+    1 / (a + b) is even in x = V + 30, so it is computed from |x|, where
+    exp(-|x| / 9) cannot overflow: d / (R |x| (2 - d)) with d = 1 - exp(-|x|
+    / 9), taken as -expm1(-|x| / 9) so that it keeps its digits near x = 0.
+    At x = 0 that is 0 / 0, and the limit 1 / (2 R 9) is returned instead.
+
+    Args:
+        V: Membrane potential [mV].
+        q: The rate factor, as for the other gates: it divides the
+            temperature factor, as taup's and taua's.
+
+    Returns:
+        The time constant [ms] (12.0 at -58 mV, 20.4 at -30).
+    """
+    x = np.abs(V + 30.0)
+    d = -np.expm1(-x / 9.0)
+    scale = _U_TEMP / q
+    limit = scale / (2.0 * 0.001 * 9.0)
+    if np.ndim(x) == 0:
+        return limit if x == 0 else scale * (d / (0.001 * x * (2.0 - d)))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tau = scale * (d / (0.001 * x * (2.0 - d)))
+    return np.where(x == 0, limit, tau)
+
+
 # --- Conductance fractions at rest -------------------------------------------
 def _fractions(
     v_rest: float = V_REST_REF,
