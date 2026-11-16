@@ -377,7 +377,13 @@ def test_kv7_deprivation_script(tmp_path):
     for r in rows:
         assert math.isfinite(r["threshold_pA"]) and r["threshold_pA"] > 0
         assert [s["multiple"] for s in r["steps"]] == res["multiples"]
-        assert r["type"] in ("phasic", "tonic", "mixed")
+        assert r["type"] in ("phasic", "tonic", "mixed", "1 spike, block")
+        for s in r["steps"]:
+            assert 0 <= s["min_h"] <= s["end_h"] + 1e-12 <= 1 + 1e-12
+            assert s["block"] == (s["end_h"] < 0.05)
+            assert math.isfinite(s["end_v_soma_mV"])
+        if r["type"] == "phasic":  # one spike each, none in block
+            assert not any(s["block"] for s in r["steps"])
     by = {
         (r["model"], r["config"], r["state"], r["m_fraction"]): r
         for r in rows

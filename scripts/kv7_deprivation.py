@@ -11,7 +11,9 @@ threshold falls from about 1360 to 500 pA, and the cell turns from phasic
 (one spike at step onset) to tonic (repetitive firing). Their full text could
 not be read for this script (see constants.py on the M gate, an inference),
 so this is the scenario applied to this repository's models, not a
-reproduction of theirs:
+reproduction of theirs. In particular, the 0.1x "deprived+soma" rows that
+land near 500 pA are a tuning of the free gM, not a reproduction of Jing's
+threshold.
 
 - two-compartment: two_cpt(klt_to_m=True, axon_cap_scale=1.5,
   axon_leak_scale=1.5) on Goldwyn et al 2019's passive calibration
@@ -23,6 +25,14 @@ reproduction of theirs:
   as well. "deprived+soma" swaps the soma's KLT for M too: a sensitivity
   check, since this calibration puts almost all KLT in the soma (2968 nS
   against the axon's 29 nS at node 3), where the AIS swap cannot reach it.
+  The second compartment is not an AIS like Jing's (their soma-AIS coupling
+  is g_ax = 56.4 nS): it is TwoCpt.m's node-3 coupling compartment, with
+  cap2 = 0.095 pF against the soma's 40 pF (1/422) and glk2 = 0.098 nS on
+  Goldwyn's calibration (0.17 pF against 71 pF, 0.084 nS on TwoCpt.m's).
+  Scaling it by 1.5 cannot move the threshold, so in this model the
+  scenario's capacitance and leak part does nothing by construction, and
+  "the AIS-only swap does little" is a statement about this model's
+  compartment sizes, not about AIS plasticity.
 - gM: Jing et al's value could not be read, so the M conductance is run
   at the removed KLT's maximal conductance (1x) and at a tenth of it.
 - 45-compartment: membrane(ais_klt_scale=0, ais_m_density=1.55,
@@ -36,8 +46,14 @@ reproduction of theirs:
 Threshold is somatic.rheobase: the smallest 100 ms somatic step that makes
 the compared compartment rise 10 mV above the soma. Firing type: spikes
 during the 100 ms step at 1.2, 2 and 3 times threshold; "phasic" if every one
-fires once, "tonic" if the 3x step fires 3 or more times, else "mixed".
-Nothing here changes a default; the tables are proposals for the PR.
+fires once and none ends in depolarisation block, "tonic" if the 3x step
+fires 3 or more times, "1 spike, block" if every step fires once and at
+least one ends in block, else "mixed". A step is in block when the compared
+compartment's Na inactivation h ends below BLOCK_H; each step records that
+h, its minimum over the step and the soma's V at the step's end, since a
+soma with little K can depolarise far past any spike (to +95 mV at 3 nA with
+both compartments' KLT swapped for gM = 0 and no KHT) and still count as one
+spike. Nothing here changes a default; the tables are proposals for the PR.
 """
 
 import argparse
@@ -49,7 +65,7 @@ from typing import Any
 import numpy as np
 
 import msoaxon
-from msoaxon import _dispatch, constants, multi, somatic, two
+from msoaxon import _dispatch, constants, multi, somatic, spiking, two
 
 MULTS = (1.2, 2.0, 3.0)
 NODE = 3
@@ -63,28 +79,33 @@ SWEEP_QUICK = (0.0, 0.4)
 TARGET = {"control": 1360.0, "deprived": 500.0}  # Jing et al 2025 [pA]
 # gM as a fraction of the gKLT it replaces: Jing et al's gM could not be read
 M_FRACTIONS = (1.0, 0.1)
+# Na inactivation of the compared compartment below which a step's end is
+# depolarisation block: the K-free soma runs reach h ~ 0, the 0.1x rows that
+# fire once stay at 0.12-0.16 (#176's first review)
+BLOCK_H = 0.05
 
 
 def spike_times(t: np.ndarray, soma: np.ndarray, axon: np.ndarray) -> list:
-    """Returns the time of each spike, counted as spiking.count_spikes does.
+    """Returns the time of each spike, by spiking.spike_indices's rule.
 
     A spike is the axon above the soma by somatic.FACTOR; the counter
     re-arms once axon < soma.
     """
-    out, armed = [], True
-    for ti, u1, u2 in zip(t, soma, axon, strict=True):
-        if u2 - u1 > somatic.FACTOR and armed:
-            out.append(float(ti))
-            armed = False
-        if u2 < u1:
-            armed = True
-    return out
+    idx = spiking.spike_indices(soma, axon, somatic.FACTOR)
+    return [float(t[i]) for i in idx]
 
 
-def firing_type(counts: list[int]) -> str:
-    """Returns "phasic", "tonic" or "mixed" from the counts at MULTS."""
+def h_column(model: str, kw: dict[str, Any]) -> int:
+    """Returns the state column of the compared compartment's Na h."""
+    if model == "two":
+        return 7  # h2, two.py's state order
+    return 2 * kw["mem"].morph.n + NODE - 1  # multi's third block
+
+
+def firing_type(counts: list[int], blocked: list[bool]) -> str:
+    """Returns the row's firing type from its counts and blocks at MULTS."""
     if all(c == 1 for c in counts):
-        return "phasic"
+        return "1 spike, block" if any(blocked) else "phasic"
     if counts[-1] >= 3:
         return "tonic"
     return "mixed"
@@ -102,7 +123,9 @@ def measure(
         rel_tol: The threshold's relative tolerance.
 
     Returns:
-        threshold [pA], and per multiple of it the spike count and times.
+        threshold [pA], and per multiple of it the spike count and times,
+        the soma's V at the step's end, the compared compartment's Na h at
+        the end and its minimum over the step, and whether it is in block.
     """
     th = somatic.rheobase(model, NODE, v0, rel_tol=rel_tol, model_kw=kw)
     row: dict[str, Any] = {"threshold_pA": th, "steps": []}
@@ -110,6 +133,7 @@ def measure(
         row["type"] = "no spike up to 1e6 pA"
         return row
     col = _dispatch.axon_column(model, NODE)
+    hcol = h_column(model, kw)
     for k in MULTS:
         t, x = _dispatch.run_model(
             model,
@@ -124,10 +148,24 @@ def measure(
             **kw,
         )
         times = spike_times(t, x[:, 0], x[:, col])
+        on = (t >= somatic.START) & (t <= somatic.STOP)
+        end = int(np.flatnonzero(on)[-1])  # the step's last sample
+        h_end = float(x[end, hcol])
         row["steps"].append(
-            {"multiple": k, "count": len(times), "times_ms": times}
+            {
+                "multiple": k,
+                "count": len(times),
+                "times_ms": times,
+                "end_v_soma_mV": float(x[end, 0]),
+                "end_h": h_end,
+                "min_h": float(x[on, hcol].min()),
+                "block": h_end < BLOCK_H,
+            }
         )
-    row["type"] = firing_type([s["count"] for s in row["steps"]])
+    row["type"] = firing_type(
+        [s["count"] for s in row["steps"]],
+        [s["block"] for s in row["steps"]],
+    )
     return row
 
 
@@ -174,6 +212,8 @@ def two_rows(rel_tol: float, mode: str | None) -> list[dict[str, Any]]:
                 state=state,
                 m_fraction=frac,
                 v0=v0,
+                cap1_pF=P.cap1,
+                gC_nS=P.gC,
                 gKLT1_nS=P.gKLT1,
                 gM1_nS=P.gM1,
                 gKLT2_nS=P.gKLT2,

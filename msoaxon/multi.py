@@ -1167,8 +1167,12 @@ def membrane(
             current and no M gate in the state. Any density > 0 adds an
             eighth state block, u, which evolves whenever KLT's w does
             (model types with KLT); its density takes the Q10 of the
-            other channels. Battefeld et al 2014 (J Neurosci 34:3719)
-            found Kv7.2/7.3 rising along the AIS and at nodes.
+            other channels (q10_conductance). Its time constant takes
+            the repo's rate factor (q10, 3 by default) away from 35 C,
+            not km.mod's own Q10 of 2.3: a choice, so that every gate
+            shares one temperature rule. At 35 C the two agree.
+            Battefeld et al 2014 (J Neurosci 34:3719) found Kv7.2/7.3
+            rising along the AIS and at nodes.
         ais_m_density: The same in the two AIS compartments.
         node_m_density: The same at the 21 nodes of Ranvier.
         ais_cap_scale: Multiplies the capacitance of the AIS

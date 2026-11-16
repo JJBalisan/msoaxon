@@ -64,11 +64,36 @@ def count_rising_edges(col: np.ndarray | Sequence[float]) -> int:
     return int(np.sum((col[1:] > 0) & (col[:-1] <= 0)))
 
 
-def count_spikes(soma: np.ndarray, axon: np.ndarray, factor: float) -> int:
-    """Counts spikes the way BinarySearch.m does.
+def spike_indices(
+    soma: np.ndarray | Sequence[float],
+    axon: np.ndarray | Sequence[float],
+    factor: float,
+) -> list[int]:
+    """Returns the sample at which each spike is counted (BinarySearch.m).
 
     A spike is the axon above the soma by `factor`; the counter re-arms
-    once axon < soma.
+    once axon < soma. count_spikes is the length of this list.
+
+    Args:
+        soma: Soma voltage per sample [mV].
+        axon: Axon voltage per sample [mV].
+        factor: The spike criterion: axon - soma [mV].
+
+    Returns:
+        The index of each spike's first sample above the criterion.
+    """
+    out, armed = [], True
+    for i, (u1, u2) in enumerate(zip(soma, axon, strict=False)):
+        if u2 - u1 > factor and armed:
+            out.append(i)
+            armed = False
+        if u2 < u1:
+            armed = True
+    return out
+
+
+def count_spikes(soma: np.ndarray, axon: np.ndarray, factor: float) -> int:
+    """Counts spikes the way BinarySearch.m does (spike_indices).
 
     Args:
         soma: Soma voltage per sample [mV].
@@ -78,14 +103,7 @@ def count_spikes(soma: np.ndarray, axon: np.ndarray, factor: float) -> int:
     Returns:
         The number of spikes.
     """
-    count, armed = 0, True
-    for u1, u2 in zip(soma, axon, strict=False):
-        if u2 - u1 > factor and armed:
-            count += 1
-            armed = False
-        if u2 < u1:
-            armed = True
-    return count
+    return len(spike_indices(soma, axon, factor))
 
 
 def matlab_round(x: float, digits: int = 0) -> float:

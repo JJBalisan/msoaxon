@@ -457,8 +457,25 @@ def _klt_and_m(
 
     Returns:
         gKLT1, IKLT0_1, gKLT2, IKLT0_2, gM1, gM2, IM0_1 and IM0_2.
+
+    Raises:
+        ValueError: If an M conductance or a KLT -> M swap is asked for
+            with a model type that has no KLT, which would otherwise
+            run without the M current and give no sign of it.
     """
     has_klt = model_type in ("active-KLT", "active-full", "active-KLT+H")
+    asked = [n for n, g in zip(("gM1", "gM2"), gM, strict=True) if g]
+    asked += [
+        n
+        for n, on in zip(("soma_klt_to_m", "klt_to_m"), swaps, strict=True)
+        if on
+    ]
+    if asked and not has_klt:
+        raise ValueError(
+            f"{', '.join(asked)} need a model type with KLT "
+            f'("active-KLT", "active-KLT+H" or "active-full"), got '
+            f"{model_type!r}: the M current exists only alongside KLT"
+        )
     out = {}
     for k, swap, (g_in, i_in), m_in in zip(
         "12", swaps, (klt[:2], klt[2:]), gM, strict=True
@@ -551,7 +568,8 @@ def get_params(
             no M current). The gate is constants.uinf / tauu (km.mod's,
             an inference: see constants.py); its resting current is
             subtracted as every other's, so rest stays at v0. Only the
-            model types with KLT have it: in the others it is 0.
+            model types with KLT have it: a nonzero gM1 or gM2, or a
+            KLT -> M swap, with any other model type is an error.
         gM2: The same for the axon compartment.
         klt_to_m: Replace the axon compartment's KLT by M, as Jing et al
             2025's deprivation scenario: gKLT2 becomes 0 and gM2, unless
@@ -559,7 +577,12 @@ def get_params(
             value (the KLT's resting share does not move into it, unlike
             klt_to_leak). The soma keeps its KLT unless soma_klt_to_m.
         axon_cap_scale: Multiplies the axon compartment's capacitance
-            (1.5 in that scenario: "AIS capacitance +50%").
+            (1.5 in that scenario: "AIS capacitance +50%"). That
+            compartment is TwoCpt.m's calibrated node compartment, not an
+            AIS like Jing et al's: at node 3 its capacitance is 1/422 of
+            the soma's (0.095 against 40 pF on Goldwyn et al 2019's
+            calibration), so this scale and axon_leak_scale barely move
+            a somatic threshold whatever the channels.
         axon_leak_scale: Multiplies its leak conductance (1.5 there).
             The leak reverses at v0 (Elk), so rest does not move.
         soma_klt_to_m: The same swap at the soma: gKLT1 becomes 0 and

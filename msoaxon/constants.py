@@ -261,7 +261,17 @@ def taua(V: np.ndarray | float, q: float = 1.0) -> np.ndarray | float:
 # 6:8815), whose Kv7 activates with V-half -30 mV and slope 9 mV, and they
 # give tau_u = 12 ms at their -58 mV rest. km.mod has that midpoint and
 # slope, and at 35 C its tau at -58 mV is 12.02 ms.
-_U_TEMP = 2.3 ** ((23 - 35) / 10)  # Q10 of 2.3 from 23 C
+#
+# Two departures from km.mod, both deliberate:
+# - km.mod, as both the author and the reviewer of #176 recall it (the file
+#   could not be fetched to check), also scales the conductance by its
+#   temperature factor, gk = tadj * gbar * u (x 2.72 at 35 C). Here the
+#   factor is on tau only, and the density is the caller's g as given. A gM
+#   taken from km.mod's gbar, or from a model that kept that line, is
+#   therefore 2.72 x smaller than the g it acts as there.
+# - Away from 35 C, tau_u follows the repo's rate factor q (membrane()'s
+#   q10, 3 by default), as every other gate does, not km.mod's Q10 of 2.3.
+_U_TEMP = 2.3 ** ((23 - 35) / 10)  # Q10 of 2.3 from 23 C, to 35 C
 
 
 def uinf(V: np.ndarray | float) -> np.ndarray | float:

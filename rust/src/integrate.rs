@@ -1294,6 +1294,71 @@ mod tests {
         }
     }
 
+    /// A chain of `n` compartments in the pattern of `model()` (soma, two
+    /// AIS, then internode/node pairs), with an M current when `with_m`.
+    fn chain_params(n: usize, with_m: bool) -> crate::core::Params {
+        let per = |soma: f64, ais: f64, inter: f64, node: f64| -> Vec<f64> {
+            (0..n)
+                .map(|i| match i {
+                    0 => soma,
+                    1 | 2 => ais,
+                    i if i % 2 == 1 => inter,
+                    _ => node,
+                })
+                .collect()
+        };
+        let mut p = crate::core::tests::model_params();
+        p.g_na = per(0.2, 4.0, 0.0, 4.0);
+        p.g_kht = per(0.1, 0.0, 0.0, 0.0);
+        p.g_klt = per(1.55, 1.55, 0.0, 1.55);
+        p.g_h = per(0.02, 0.02, 0.0, 0.0);
+        p.g_lk = per(0.0005, 0.0005, 0.0002, 0.05);
+        p.vlk = (0..n).map(|i| -65.0 - 0.05 * i as f64).collect();
+        p.na_vhalf = vec![62.5; n];
+        p.cap = (0..n).map(|i| 1.0 + 0.01 * i as f64).collect();
+        p.sa = per(8750.0, 200.0, 207.3, 2.07);
+        p.g_ax = (0..n - 1)
+            .map(|e| 2.0e-8 * (1.0 + 0.05 * e as f64))
+            .collect();
+        p.parent = (0..n as i64 - 1).collect();
+        p.child = (1..n as i64).collect();
+        p.g_m = with_m.then(|| per(0.05, 1.55, 0.0, 0.8));
+        p
+    }
+
+    #[test]
+    fn the_tree_reads_its_gate_count_when_both_divide_the_state() {
+        // 8 n is a multiple of 7 for n = 49 and 56, and 7 n of 8 for
+        // n = 56: the tree must still find 7 gates with M and 6 without,
+        // and solve as faer does (finding 6 of #176's first review)
+        use crate::core::StimSpec;
+        for (n, with_m) in [(49, true), (56, true), (56, false), (48, false)] {
+            let rhs = MultiRhs::new(chain_params(n, with_m), &StimSpec::default()).unwrap();
+            let ng = if with_m { 7 } else { 6 };
+            assert_eq!(rhs.nstates(), (ng + 1) * n);
+            let x: Vec<f64> = (0..rhs.nstates())
+                .map(|j| {
+                    if j < n {
+                        -75.0 + 0.7 * (j % 45) as f64
+                    } else {
+                        0.05 + 0.9 * ((j * 37 % 101) as f64 / 100.0)
+                    }
+                })
+                .collect();
+            for c in [1e-4, 1e-2, 0.3] {
+                let op = newton_matrix(rhs.clone(), &x, 1.0, c, &[]);
+                let mut lu = TreeLu::default();
+                lu.set_sparsity(&op);
+                let tree = lu.tree.as_ref().expect("the pattern is a tree");
+                assert_eq!((tree.n, tree.ng), (n, ng), "n = {n}, M {with_m}");
+                let ([tree, faer, tree_t, faer_t], used_faer) = both_solves(&op);
+                assert!(!used_faer, "n = {n}, M {with_m}: fell back at c = {c}");
+                assert!(rel_diff(&tree, &faer) < 1e-12, "n = {n}, c = {c}");
+                assert!(rel_diff(&tree_t, &faer_t) < 1e-12, "n = {n}, c = {c}");
+            }
+        }
+    }
+
     #[test]
     fn a_native_run_with_the_m_gate_ends_on_t1() {
         use crate::core::tests::m_params;

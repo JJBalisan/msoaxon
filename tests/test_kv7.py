@@ -17,7 +17,15 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from msoaxon import _common, _fast, constants as C, multi, synaptic, two
+from msoaxon import (
+    _common,
+    _fast,
+    constants as C,
+    multi,
+    spiking,
+    synaptic,
+    two,
+)
 
 BITWISE = sys.platform == "darwin" and platform.machine() == "arm64"
 needs_ext = pytest.mark.skipif(
@@ -234,9 +242,21 @@ def test_two_klt_to_m_swaps_the_axon_klt_only():
 
 
 def test_two_m_needs_a_model_type_with_klt():
-    for mt in ("passive", "active-H", "Active-sodium"):
-        P = two.get_params(-68.0, 3, 1, mt, gM1=5.0, gM2=5.0, klt_to_m=True)
+    # an M conductance or a swap without KLT is refused, not dropped
+    for mt in ("passive", "active-H", "Active-sodium", "active-KHT"):
+        for kw in (
+            {"gM1": 5.0},
+            {"gM2": 50.0},
+            {"klt_to_m": True},
+            {"soma_klt_to_m": True},
+        ):
+            with pytest.raises(ValueError, match="need a model type with KLT"):
+                two.get_params(-68.0, 3, 1, mt, **kw)
+        # a zero or absent gM is no M current, as it always was
+        P = two.get_params(-68.0, 3, 1, mt, gM1=0.0, gM2=None)
         assert not P.has_m, mt
+    for mt in ("active-KLT", "active-KLT+H", "active-full"):
+        assert two.get_params(-68.0, 3, 1, mt, gM2=5.0).has_m, mt
 
 
 def test_two_m_rest_is_a_steady_state_and_dv_matches():
@@ -435,3 +455,21 @@ def test_self_check_is_untouched_by_the_m_gating_names():
     # (states that differ in any bit, states compared, worst difference):
     # how many differ depends on the platform's libm, so only the bound
     assert compared > 0 and 0 <= differ <= compared and worst < 1e-10
+
+
+def test_spike_indices_is_count_spikes_rule():
+    # count_spikes is now len(spike_indices); the BinarySearch.m rule (count
+    # above factor, re-arm once axon < soma) on traces that cross often
+    rng = np.random.default_rng(7)
+    for _ in range(20):
+        soma = rng.normal(-60, 5, 400)
+        axon = soma + np.cumsum(rng.normal(0, 4, 400))
+        want, armed = [], True
+        for i, (u1, u2) in enumerate(zip(soma, axon, strict=True)):
+            if u2 - u1 > 10 and armed:
+                want.append(i)
+                armed = False
+            if u2 < u1:
+                armed = True
+        assert spiking.spike_indices(soma, axon, 10) == want
+        assert spiking.count_spikes(soma, axon, 10) == len(want)
